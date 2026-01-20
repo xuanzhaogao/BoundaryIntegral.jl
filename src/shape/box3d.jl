@@ -97,12 +97,11 @@ function divide_temp_panel3d(tpl::TempPanel3D{T}, n_divide_x::Int, n_divide_y::I
     return panels
 end
 
-# l_panel is the maximum length of a none-corner panel, l_ec is the maximum length of a edge-corner panel
-function rect_panel3d_adaptive_panels(a::NTuple{3, T}, b::NTuple{3, T}, c::NTuple{3, T}, d::NTuple{3, T}, ns::Vector{T}, ws::Vector{T}, normal::NTuple{3, T}, is_edge::NTuple{4, Bool}, is_corner::NTuple{4, Bool}, l_panel::T, l_ec::T) where T
+# alpha controls the coarse grid aspect ratio; l_ec is the maximum length of an edge/corner panel
+function rect_panel3d_adaptive_panels(a::NTuple{3, T}, b::NTuple{3, T}, c::NTuple{3, T}, d::NTuple{3, T}, ns::Vector{T}, ws::Vector{T}, normal::NTuple{3, T}, is_edge::NTuple{4, Bool}, is_corner::NTuple{4, Bool}, alpha::T, l_ec::T) where T
     Lab = norm(b .- a)
     Lda = norm(a .- d)
-    n_divide_x = ceil(Int, Lab / l_panel)
-    n_divide_y = ceil(Int, Lda / l_panel)
+    n_divide_x, n_divide_y = best_grid_mn(Lab, Lda, alpha)
 
     rough = divide_temp_panel3d(
         TempPanel3D(a, b, c, d, is_corner[1], is_corner[2], is_corner[3], is_corner[4], is_edge[1], is_edge[2], is_edge[3], is_edge[4], normal),
@@ -133,7 +132,7 @@ function rect_panel3d_adaptive_panels(a::NTuple{3, T}, b::NTuple{3, T}, c::NTupl
     return panels
 end
 
-function single_dielectric_box3d(Lx::T, Ly::T, Lz::T, n_quad::Int, l_panel::T, l_ec::T, eps_in::T, eps_out::T, ::Type{T} = Float64) where T
+function single_dielectric_box3d(Lx::T, Ly::T, Lz::T, n_quad::Int, l_ec::T, eps_in::T, eps_out::T, ::Type{T} = Float64; alpha::T = sqrt(T(2))) where T
     ns, ws = gausslegendre(n_quad)
     t1 = one(T)
     t0 = zero(T)
@@ -179,7 +178,7 @@ function single_dielectric_box3d(Lx::T, Ly::T, Lz::T, n_quad::Int, l_panel::T, l
             normal,
             (true, true, true, true),
             (true, true, true, true),
-            l_panel,
+            alpha,
             l_ec,
         ))
     end

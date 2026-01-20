@@ -6,7 +6,7 @@ using Test
 
 @testset "dielectric_box3d" begin
     eps_box = 4.0
-    interface = BI.single_dielectric_box3d(1.2, 0.8, 0.6, 4, 0.4, 0.2, eps_box, 1.0, Float64)
+    interface = BI.single_dielectric_box3d(1.2, 0.8, 0.6, 4, 0.2, eps_box, 1.0, Float64; alpha = sqrt(2))
 
     lhs = BI.Lhs_dielectric_box3d(interface)
     lhs_fmm3d = BI.Lhs_dielectric_box3d_fmm3d(interface, 1e-12)
@@ -31,7 +31,7 @@ end
 
 @testset "dielectric_box3d corrected" begin
     eps_box = 4.0
-    interface = BI.single_dielectric_box3d(3.0, 3.0, 1.0, 4, 1.0, 0.2, eps_box, 1.0, Float64)
+    interface = BI.single_dielectric_box3d(3.0, 3.0, 1.0, 4, 0.2, eps_box, 1.0, Float64; alpha = sqrt(2))
 
     lhs_uncorrected = BI.Lhs_dielectric_box3d_fmm3d(interface, 1e-6)
     lhs_corrected = BI.Lhs_dielectric_box3d_fmm3d_corrected(interface, 1e-6, 1e-6, 12)

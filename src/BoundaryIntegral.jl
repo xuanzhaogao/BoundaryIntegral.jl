@@ -57,6 +57,7 @@ include("utils/corner_singularity.jl")
 include("utils/barycentric.jl")
 include("utils/bernstein.jl")
 include("utils/quad_order.jl")
+include("utils/best_grid.jl")
 
 # # solvers
 include("solver/dielectric_box2d.jl")

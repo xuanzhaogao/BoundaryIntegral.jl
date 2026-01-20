@@ -5,7 +5,7 @@ using Random
 using Test
 
 function box3d_interface()
-    return BI.single_dielectric_box3d(1.2, 0.8, 0.6, 4, 0.4, 0.2, 2.0, 1.0, Float64)
+    return BI.single_dielectric_box3d(1.2, 0.8, 0.6, 4, 0.2, 2.0, 1.0, Float64; alpha = sqrt(2))
 end
 
 @testset "laplace3d kernels on meshed box" begin
@@ -114,7 +114,7 @@ end
     errs = Float64[]
 
     for n_quad in n_quads
-        interface = BI.single_dielectric_box3d(1.0, 1.0, 1.0, n_quad, 0.5, 0.3, 2.0, 1.0, Float64)
+        interface = BI.single_dielectric_box3d(1.0, 1.0, 1.0, n_quad, 0.3, 2.0, 1.0, Float64; alpha = sqrt(2))
         flux = 0.0
         for p in BI.eachpoint(interface)
             flux += BI.laplace3d_grad(src, p.panel_point.point, p.panel_point.normal) * p.panel_point.weight
