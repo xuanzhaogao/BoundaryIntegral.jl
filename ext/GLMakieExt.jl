@@ -38,10 +38,11 @@ function viz_3d!(
     highlight_panel::Union{Nothing, Int} = nothing,
     neighbor_list::Union{Nothing, Dict{Tuple{Int, Int}, Int}} = nothing,
     neighbor_max_order::Union{Nothing, Int} = nothing,
-    neighbor_l_min::Union{Nothing, T} = nothing,
     neighbor_atol::Union{Nothing, T} = nothing,
+    highlight_edges::Bool = false,
     highlight_color = :orange,
     neighbor_color = :green,
+    edge_color = :cyan,
     base_color = :blue,
     fill_highlight::Bool = true,
     fill_neighbors::Bool = true,
@@ -53,10 +54,10 @@ function viz_3d!(
         n_panels = length(interface.panels)
         (1 <= highlight_panel <= n_panels) || throw(ArgumentError("highlight_panel must be between 1 and $(n_panels)"))
         if neighbor_list === nothing
-            if neighbor_max_order === nothing || neighbor_l_min === nothing || neighbor_atol === nothing
-                throw(ArgumentError("highlight_panel requires neighbor_list or neighbor_max_order, neighbor_l_min, and neighbor_atol"))
+            if neighbor_max_order === nothing || neighbor_atol === nothing
+                throw(ArgumentError("highlight_panel requires neighbor_list or neighbor_max_order and neighbor_atol"))
             end
-            neighbor_list = build_neighbor_list(interface, neighbor_max_order, neighbor_l_min, neighbor_atol)
+            neighbor_list = build_neighbor_list(interface, neighbor_max_order, neighbor_atol)
         end
         for ((i, j), _) in neighbor_list
             if i == highlight_panel
@@ -75,7 +76,11 @@ function viz_3d!(
                 panel_color = highlight_color
             elseif panel_idx in neighbor_indices
                 panel_color = neighbor_color
+            elseif highlight_edges && panel.is_edge
+                panel_color = edge_color
             end
+        elseif highlight_edges && panel.is_edge
+            panel_color = edge_color
         end
         if fill_highlight && highlight_panel !== nothing
             should_fill = panel_idx == highlight_panel || (fill_neighbors && panel_idx in neighbor_indices)
@@ -93,7 +98,7 @@ function viz_3d!(
             xs = [p[1] for p in panel.points]
             ys = [p[2] for p in panel.points]
             zs = [p[3] for p in panel.points]
-            point_color = panel_idx == highlight_panel || panel_idx in neighbor_indices ? panel_color : :red
+            point_color = (panel_idx == highlight_panel || panel_idx in neighbor_indices || (highlight_edges && panel.is_edge)) ? panel_color : :red
             scatter!(ax, xs, ys, zs, color = point_color, markersize = 3)
         end
 
@@ -113,10 +118,11 @@ function viz_3d(
     highlight_panel::Union{Nothing, Int} = nothing,
     neighbor_list::Union{Nothing, Dict{Tuple{Int, Int}, Int}} = nothing,
     neighbor_max_order::Union{Nothing, Int} = nothing,
-    neighbor_l_min::Union{Nothing, T} = nothing,
     neighbor_atol::Union{Nothing, T} = nothing,
+    highlight_edges::Bool = false,
     highlight_color = :orange,
     neighbor_color = :green,
+    edge_color = :cyan,
     base_color = :blue,
     fill_highlight::Bool = true,
     fill_neighbors::Bool = true,
@@ -133,10 +139,11 @@ function viz_3d(
         highlight_panel = highlight_panel,
         neighbor_list = neighbor_list,
         neighbor_max_order = neighbor_max_order,
-        neighbor_l_min = neighbor_l_min,
         neighbor_atol = neighbor_atol,
+        highlight_edges = highlight_edges,
         highlight_color = highlight_color,
         neighbor_color = neighbor_color,
+        edge_color = edge_color,
         base_color = base_color,
         fill_highlight = fill_highlight,
         fill_neighbors = fill_neighbors,
@@ -152,10 +159,11 @@ function viz_3d(
     highlight_panel::Union{Nothing, Int} = nothing,
     neighbor_list::Union{Nothing, Dict{Tuple{Int, Int}, Int}} = nothing,
     neighbor_max_order::Union{Nothing, Int} = nothing,
-    neighbor_l_min::Union{Nothing, T} = nothing,
     neighbor_atol::Union{Nothing, T} = nothing,
+    highlight_edges::Bool = false,
     highlight_color = :orange,
     neighbor_color = :green,
+    edge_color = :cyan,
     base_color = :blue,
     fill_highlight::Bool = true,
     fill_neighbors::Bool = true,
@@ -173,10 +181,11 @@ function viz_3d(
             highlight_panel = highlight_panel,
             neighbor_list = neighbor_list,
             neighbor_max_order = neighbor_max_order,
-            neighbor_l_min = neighbor_l_min,
             neighbor_atol = neighbor_atol,
+            highlight_edges = highlight_edges,
             highlight_color = highlight_color,
             neighbor_color = neighbor_color,
+            edge_color = edge_color,
             base_color = base_color,
             fill_highlight = fill_highlight,
             fill_neighbors = fill_neighbors,

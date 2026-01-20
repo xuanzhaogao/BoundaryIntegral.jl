@@ -53,8 +53,12 @@ function laplace3d_DT_panel_upsampled(panel_src::FlatPanel{T, 3}, panel_trg::Fla
 end
 
 # neighbor list describes the pair of panels that are near each other and the order needed for evaluation
-# if one of the panels is smaller than l_min, no correction is needed
-function build_neighbor_list(interface::DielectricInterface{P, T}, max_order::Int, l_min::T, atol::T) where {P <: AbstractPanel, T}
+function build_neighbor_list(
+    interface::DielectricInterface{P, T},
+    max_order::Int,
+    atol::T;
+    include_edges::Bool = true,
+) where {P <: AbstractPanel, T}
     neighbor_list = Dict{Tuple{Int, Int}, Int}()
     n_panels = length(interface.panels)
     centers = Matrix{T}(undef, 3, n_panels)
@@ -62,6 +66,12 @@ function build_neighbor_list(interface::DielectricInterface{P, T}, max_order::In
     n_quads = Vector{Int}(undef, n_panels)
 
     for (i, panel) in enumerate(interface.panels)
+        if !include_edges && panel.is_edge
+            lengths[i] = zero(T)
+            n_quads[i] = panel.n_quad
+            @views centers[:, i] .= panel.corners[1]
+            continue
+        end
         c_panel = (panel.corners[1] .+ panel.corners[2] .+ panel.corners[3] .+ panel.corners[4]) ./ 4
         @views centers[:, i] .= c_panel
         lengths[i] = max(norm(panel.corners[1] .- panel.corners[2]), norm(panel.corners[2] .- panel.corners[3]))
@@ -71,15 +81,15 @@ function build_neighbor_list(interface::DielectricInterface{P, T}, max_order::In
     tree = KDTree(centers)
 
     for (i, paneli) in enumerate(interface.panels)
-        l_i = lengths[i]
-        l_i <= l_min && continue
+        !include_edges && paneli.is_edge && continue
         n_quad_i = n_quads[i]
+        l_i = lengths[i]
         r_i = 10 * l_i / n_quad_i
         nearby = inrange(tree, centers[:, i], r_i)
 
         for j in nearby
             i == j && continue
-            lengths[j] <= l_min && continue
+            !include_edges && interface.panels[j].is_edge && continue
             order_i = check_quad_order3d(paneli, (centers[1, j], centers[2, j], centers[3, j]), atol, max_order)
             order_i > n_quad_i && (neighbor_list[(i, j)] = order_i)
         end
@@ -131,12 +141,12 @@ function laplace3d_DT_fmm3d_corrected(
     interface::DielectricInterface{P, Float64},
     fmm_tol::Float64,
     up_tol::Float64,
-    max_order::Int,
-    l_min::Float64,
+    max_order::Int;
+    include_edges::Bool = true,
 ) where {P <: AbstractPanel}
     n_points = num_points(interface)
     D_base = laplace3d_DT_fmm3d(interface, fmm_tol)
-    neighbor_list = build_neighbor_list(interface, max_order, l_min, up_tol)
+    neighbor_list = build_neighbor_list(interface, max_order, up_tol; include_edges = include_edges)
     @info "length of neighbor_list: $(length(keys(neighbor_list))) out of $(length(interface.panels)^2)"
     corrections = laplace3d_DT_corrections(interface, neighbor_list)
 

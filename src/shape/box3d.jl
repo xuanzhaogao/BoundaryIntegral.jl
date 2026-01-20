@@ -19,7 +19,16 @@ struct TempPanel3D{T}
 end
 
 # mesh a rectangle surface panel with tensor product Gauss-Legendre quadrature points
-function rect_panel3d_discretize(a::NTuple{3, T}, b::NTuple{3, T}, c::NTuple{3, T}, d::NTuple{3, T}, ns::Vector{T}, ws::Vector{T}, normal::NTuple{3, T}) where T
+function rect_panel3d_discretize(
+    a::NTuple{3, T},
+    b::NTuple{3, T},
+    c::NTuple{3, T},
+    d::NTuple{3, T},
+    ns::Vector{T},
+    ws::Vector{T},
+    normal::NTuple{3, T};
+    is_edge::Bool = false,
+) where T
 
     # check edge lengths
     Lab = norm(b .- a)
@@ -51,7 +60,7 @@ function rect_panel3d_discretize(a::NTuple{3, T}, b::NTuple{3, T}, c::NTuple{3, 
     
     corners = [a, b, c, d]
 
-    return FlatPanel(normal, corners, length(ns), ns, ws, points, weights)
+    return FlatPanel(normal, corners, is_edge, length(ns), ns, ws, points, weights)
 end
 
 function divide_temp_panel3d(tpl::TempPanel3D{T}, n_divide_x::Int, n_divide_y::Int) where T
@@ -117,7 +126,8 @@ function rect_panel3d_adaptive_panels(a::NTuple{3, T}, b::NTuple{3, T}, c::NTupl
 
     panels = Vector{FlatPanel{T, 3}}()
     for tpl in fine
-        push!(panels, rect_panel3d_discretize(tpl.a, tpl.b, tpl.c, tpl.d, ns, ws, tpl.normal))
+        is_edge = tpl.is_ab_edge || tpl.is_bc_edge || tpl.is_cd_edge || tpl.is_da_edge || tpl.is_a_corner || tpl.is_b_corner || tpl.is_c_corner || tpl.is_d_corner
+        push!(panels, rect_panel3d_discretize(tpl.a, tpl.b, tpl.c, tpl.d, ns, ws, tpl.normal; is_edge = is_edge))
     end
 
     return panels

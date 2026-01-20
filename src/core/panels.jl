@@ -6,6 +6,7 @@ struct FlatPanel{T, D} <: AbstractPanel
     # information about the panel
     normal::NTuple{D, T}
     corners::Vector{NTuple{D, T}} # corners are arranged in a anti-clockwise order (lb, rb, rt, lt)
+    is_edge::Bool
 
     # quadrature information (same order in each tangential direction)
     n_quad::Int

@@ -43,9 +43,15 @@ function Lhs_dielectric_box3d_fmm3d(interface::DielectricInterface{P, T}, tol::F
 end
 
 # linear operator for the corrected DT kernel
-function Lhs_dielectric_box3d_fmm3d_corrected(interface::DielectricInterface{P, Float64}, fmm_tol::Float64, up_tol::Float64, max_order::Int, l_min::Float64) where {P <: AbstractPanel}
+function Lhs_dielectric_box3d_fmm3d_corrected(
+    interface::DielectricInterface{P, Float64},
+    fmm_tol::Float64,
+    up_tol::Float64,
+    max_order::Int;
+    include_edges::Bool = true,
+) where {P <: AbstractPanel}
     n_points = num_points(interface)
-    D_transpose = laplace3d_DT_fmm3d_corrected(interface, fmm_tol, up_tol, max_order, l_min)
+    D_transpose = laplace3d_DT_fmm3d_corrected(interface, fmm_tol, up_tol, max_order; include_edges = include_edges)
 
     function apply_operator(charges::AbstractVector{Float64})
         y = D_transpose * charges

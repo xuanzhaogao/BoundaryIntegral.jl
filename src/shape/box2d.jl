@@ -10,7 +10,7 @@ struct TempPanel2D{T}
 end
 
 # 1d line panel with Guass-Legendre quadrature
-function line_panel2d_discretize(a::NTuple{2, T}, b::NTuple{2, T}, ns::Vector{T}, ws::Vector{T}, normal::NTuple{2, T}) where T
+function line_panel2d_discretize(a::NTuple{2, T}, b::NTuple{2, T}, ns::Vector{T}, ws::Vector{T}, normal::NTuple{2, T}; is_edge::Bool = true) where T
 
     points = [(b .+ a) ./ 2 .+ ns[i] .* (b .- a) ./ 2 for i in 1:length(ns)]
     L = norm(b .- a)
@@ -19,7 +19,7 @@ function line_panel2d_discretize(a::NTuple{2, T}, b::NTuple{2, T}, ns::Vector{T}
     @assert norm(normal) ≈ 1 "Normal is not a unit vector"
     @assert dot(normal, b .- a) < 1e-10 "Normal is not perpendicular to the line segment"
 
-    return FlatPanel(normal, [a, b], length(ns), ns, ws, points, weights)
+    return FlatPanel(normal, [a, b], is_edge, length(ns), ns, ws, points, weights)
 end
 
 # divide the panel into two smaller panels
