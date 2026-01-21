@@ -21,33 +21,38 @@ function laplace3d_DT_panel_upsampled(panel_src::FlatPanel{T, 3}, panel_trg::Fla
     ns0 = panel_src.gl_xs
     ws0 = panel_src.gl_ws
 
-    M_up = interp_matrix_2d_gl_tensor(ns0, ws0, ns0, ws0, ns_up, ns_up)
+    Ex = interp_matrix_1d_gl(ns0, ws0, ns_up)
+    Ey = Ex
 
     a, b, c, d = panel_src.corners
     cc = (a .+ b .+ c .+ d) ./ 4
     Lx = norm(b .- a)
     Ly = norm(d .- a)
+    scale = Lx * Ly / 4
 
-    weights_up = Vector{T}(undef, n_up * n_up)
-    points_up = Vector{NTuple{3, T}}(undef, n_up * n_up)
-    idx = 1
-    for j in 1:n_up
-        for i in 1:n_up
-            points_up[idx] = cc .+ (b .- a) .* (ns_up[i] / 2) .+ (d .- a) .* (ns_up[j] / 2)
-            weights_up[idx] = ws_up[i] * ws_up[j] * Lx * Ly / 4
-            idx += 1
-        end
-    end
-
+    bma = b .- a
+    dma = d .- a
+    n_quad = panel_src.n_quad
     np_trg = num_points(panel_trg)
-    D_up_trg = zeros(T, np_trg, n_up * n_up)
-    for (ti, point_trg) in enumerate(eachpoint(panel_trg))
-        for ui in 1:length(points_up)
-            D_up_trg[ti, ui] = laplace3d_grad(points_up[ui], point_trg.point, point_trg.normal)
-        end
-    end
+    DT_up = zeros(T, np_trg, n_quad * n_quad)
+    D_weighted = Matrix{T}(undef, n_up, n_up)
+    temp = Matrix{T}(undef, n_quad, n_up)
+    block = Matrix{T}(undef, n_quad, n_quad)
 
-    DT_up = D_up_trg * diagm(weights_up) * M_up
+    for (ti, point_trg) in enumerate(eachpoint(panel_trg))
+        @inbounds for j in 1:n_up
+            y = ns_up[j] / 2
+            wy = ws_up[j]
+            for i in 1:n_up
+                x = ns_up[i] / 2
+                p = cc .+ bma .* x .+ dma .* y
+                D_weighted[i, j] = laplace3d_grad(p, point_trg.point, point_trg.normal) * (ws_up[i] * wy * scale)
+            end
+        end
+        mul!(temp, transpose(Ex), D_weighted)
+        mul!(block, temp, Ey)
+        @views DT_up[ti, :] .= vec(block)
+    end
 
     return DT_up
 end
