@@ -48,3 +48,48 @@ end
     @test isapprox(total_flux_uncorrected + 1.0 / eps_box, 1.0, atol = 1e-1)
     @test isapprox(total_flux_corrected + 1.0 / eps_box, 1.0, atol = 1e-1)
 end
+
+@testset "dielectric_box3d rhs adaptive" begin
+    eps_box = 4.0
+    ps = BI.PointSource((0.1, 0.1, 0.1), 1.0)
+    interface = BI.single_dielectric_box3d_rhs_adaptive(
+        1.2,
+        0.8,
+        0.6,
+        2,
+        ps,
+        eps_box,
+        0.099,
+        1e-6,
+        eps_box,
+        1.0,
+        Float64;
+        max_depth = 2,
+    )
+    lhs = BI.Lhs_dielectric_box3d(interface)
+    rhs = BI.Rhs_dielectric_box3d(interface, ps, eps_box)
+    x = BI.solve_gmres(lhs, rhs, 1e-6, 1e-6)
+    @test norm(lhs * x - rhs) < 1e-5
+    @test abs(dot(BI.all_weights(interface), x) +  1.0 / eps_box - 1.0) < 1e-2
+
+    ps = BI.PointSource((1.0, 1.0, 1.0), 1.0)
+    interface = BI.single_dielectric_box3d_rhs_adaptive(
+        1.2,
+        0.8,
+        0.6,
+        2,
+        ps,
+        1.0,
+        0.099,
+        1e-6,
+        eps_box,
+        1.0,
+        Float64;
+        max_depth = 2,
+    )
+    lhs = BI.Lhs_dielectric_box3d(interface)
+    rhs = BI.Rhs_dielectric_box3d(interface, ps, 1.0)
+    x = BI.solve_gmres(lhs, rhs, 1e-6, 1e-6)
+    @test norm(lhs * x - rhs) < 1e-5
+    @test abs(dot(BI.all_weights(interface), x)) < 1e-2
+end
