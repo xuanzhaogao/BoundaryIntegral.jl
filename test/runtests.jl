@@ -9,6 +9,7 @@ using Test
     include("utils/linear_algebra.jl")
     include("utils/barycentric.jl")
     include("utils/quad_order.jl")
+    include("utils/best_grid.jl")
 
     # kernel functions
     include("kernel/laplace2d.jl")

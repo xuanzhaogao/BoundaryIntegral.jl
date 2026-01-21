@@ -28,8 +28,8 @@ function best_grid(W::Real, H::Real, alpha::Real;
     # Helper: aspect ratio of each small rectangle for grid (m,n)
     # small w = W/m, h = H/n, so w/h = (W*n)/(H*m)
     aspect(m::Int, n::Int) = begin
-        x = (W * n) / (H * m)
-        x >= 1 ? x : 1 / x
+        ratio = (W * n) / (H * m)
+        ratio >= 1 ? ratio : 1 / ratio
     end
 
     # Track best feasible solution (minimize m*n, tie-break by closeness to 1).
