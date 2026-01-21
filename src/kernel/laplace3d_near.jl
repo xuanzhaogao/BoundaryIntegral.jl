@@ -199,11 +199,12 @@ function laplace3d_DT_fmm3d_corrected(
     fmm_tol::Float64,
     up_tol::Float64,
     max_order::Int;
-    include_edges::Bool = true,
+    include_edges_src::Bool = true,
+    include_edges_trg::Bool = true,
 ) where {P <: AbstractPanel}
     n_points = num_points(interface)
     D_base = laplace3d_DT_fmm3d(interface, fmm_tol)
-    neighbor_list = build_neighbor_list(interface, max_order, up_tol, include_edges, include_edges)
+    neighbor_list = build_neighbor_list(interface, max_order, up_tol, include_edges_src, include_edges_trg)
     @info "length of neighbor_list: $(length(keys(neighbor_list))) out of $(length(interface.panels)^2)"
     corrections = laplace3d_DT_corrections(interface, neighbor_list)
 
