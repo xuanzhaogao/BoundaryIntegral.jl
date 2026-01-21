@@ -89,7 +89,7 @@ function build_neighbor_list(
             point_idx += 1
         end
     end
-    tree = BallTree(points)
+    tree = KDTree(points)
 
     same_surface_tol = sqrt(eps(T))
 

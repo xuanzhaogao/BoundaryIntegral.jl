@@ -52,15 +52,15 @@ function check_quad_order3d(panel::FlatPanel{T, 3}, trg::NTuple{3, T}, atol::T, 
 
     n_quad_up = n_quad
     while n_quad_up < max_order
-        curr_val = int_laplace3d_grad(n_quad, n_quad_up + 1, panel, trg)
+        curr_val = int_laplace3d_grad(n_quad, 2 * n_quad_up, panel, trg)
         err = norm(curr_val - prev_val, Inf)
         if err < atol
             return n_quad_up
         end
         prev_val = curr_val
-        n_quad_up += 1
+        n_quad_up *= 2
     end
 
-    @warn "self-convergence error is > $(atol) at order $(max_order)"
+    # @warn "self-convergence error is > $(atol) at order $(max_order)"
     return max_order
 end
