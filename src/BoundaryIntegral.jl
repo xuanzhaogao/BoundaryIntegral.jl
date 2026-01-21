@@ -2,7 +2,7 @@ module BoundaryIntegral
 
 using LinearAlgebra
 using SparseArrays
-using FastGaussQuadrature
+using FastGaussQuadrature, LegendrePolynomials
 using Krylov, LinearMaps, Roots
 using NearestNeighbors
 

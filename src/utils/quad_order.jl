@@ -23,7 +23,8 @@ function int_laplace3d_grad(n_quad::Int, n_quad_up::Int, panel::FlatPanel{T, 3},
     val = zeros(T, n_quad + 1, n_quad + 1)
     for i in 0:n_quad
         for j in 0:n_quad
-            f = (x, y) -> legendre_p(i, x) * legendre_p(j, y)
+            # f = (x, y) -> legendre_p(i, x) * legendre_p(j, y)
+            f = (x, y) -> Pl(x, i) * Pl(y, j)
             val_ij = zero(T)
             for k in 1:n_quad_up
                 for l in 1:n_quad_up

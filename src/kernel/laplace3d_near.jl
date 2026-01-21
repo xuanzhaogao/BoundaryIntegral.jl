@@ -64,34 +64,61 @@ function build_neighbor_list(
     centers = Matrix{T}(undef, 3, n_panels)
     lengths = Vector{T}(undef, n_panels)
     n_quads = Vector{Int}(undef, n_panels)
+    normals = Vector{NTuple{3, T}}(undef, n_panels)
+    plane_offsets = Vector{T}(undef, n_panels)
 
     for (i, panel) in enumerate(interface.panels)
-        if !include_edges && panel.is_edge
-            lengths[i] = zero(T)
-            n_quads[i] = panel.n_quad
-            @views centers[:, i] .= panel.corners[1]
-            continue
-        end
         c_panel = (panel.corners[1] .+ panel.corners[2] .+ panel.corners[3] .+ panel.corners[4]) ./ 4
         @views centers[:, i] .= c_panel
         lengths[i] = max(norm(panel.corners[1] .- panel.corners[2]), norm(panel.corners[2] .- panel.corners[3]))
         n_quads[i] = panel.n_quad
+        normals[i] = panel.normal
+        plane_offsets[i] = dot(panel.normal, panel.corners[1])
     end
 
-    tree = KDTree(centers)
+    n_points = sum(length(panel.points) for panel in interface.panels)
+    points = Matrix{T}(undef, 3, n_points)
+    point_panel_idx = Vector{Int}(undef, n_points)
+    point_idx = 1
+    for (panel_idx, panel) in enumerate(interface.panels)
+        for point in panel.points
+            @views points[:, point_idx] .= point
+            point_panel_idx[point_idx] = panel_idx
+            point_idx += 1
+        end
+    end
+    tree = KDTree(points)
+
+    same_surface_tol = sqrt(eps(T))
 
     for (i, paneli) in enumerate(interface.panels)
         !include_edges && paneli.is_edge && continue
-        n_quad_i = n_quads[i]
         l_i = lengths[i]
+        n_quad_i = n_quads[i]
         r_i = 10 * l_i / n_quad_i
         nearby = inrange(tree, centers[:, i], r_i)
 
-        for j in nearby
+        for point_id in nearby
+            j = point_panel_idx[point_id]
             i == j && continue
             !include_edges && interface.panels[j].is_edge && continue
-            order_i = check_quad_order3d(paneli, (centers[1, j], centers[2, j], centers[3, j]), atol, max_order)
-            order_i > n_quad_i && (neighbor_list[(i, j)] = order_i)
+
+            dot_normals = dot(normals[i], normals[j])
+            if dot_normals > 1 - same_surface_tol
+                if abs(plane_offsets[i] - plane_offsets[j]) <= same_surface_tol * max(one(T), l_i)
+                    continue
+                end
+            end
+
+            # neighbor_list[(i, j)] = n_quad_i
+
+            order_i = check_quad_order3d(paneli, (points[1, point_id], points[2, point_id], points[3, point_id]), atol, max_order)
+
+            if order_i > n_quad_i
+                key = (i, j)
+                prev = get(neighbor_list, key, n_quad_i)
+                neighbor_list[key] = max(prev, order_i)
+            end
         end
     end
 

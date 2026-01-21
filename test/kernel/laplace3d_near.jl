@@ -143,10 +143,10 @@ end
         normal,
     )
     p4 = BI.rect_panel3d_discretize(
-        (1.0, 1.0, 1.05),
-        (1.02, 1.0, 1.05),
-        (1.02, 1.02, 1.05),
-        (1.0, 1.02, 1.05),
+        (1.0, 1.0, 1.2),
+        (1.02, 1.0, 1.2),
+        (1.02, 1.02, 1.2),
+        (1.0, 1.02, 1.2),
         ns,
         ws,
         normal,
@@ -161,8 +161,22 @@ end
     center_p2 = (p2.corners[1] .+ p2.corners[2] .+ p2.corners[3] .+ p2.corners[4]) ./ 4
     center_p1 = (p1.corners[1] .+ p1.corners[2] .+ p1.corners[3] .+ p1.corners[4]) ./ 4
 
-    order_12 = BI.check_quad_order3d(p1, center_p2, atol, max_order)
-    order_21 = BI.check_quad_order3d(p2, center_p1, atol, max_order)
+    l1 = max(norm(p1.corners[1] .- p1.corners[2]), norm(p1.corners[2] .- p1.corners[3]))
+    l2 = max(norm(p2.corners[1] .- p2.corners[2]), norm(p2.corners[2] .- p2.corners[3]))
+    r1 = 5 * l1 / p1.n_quad
+    r2 = 5 * l2 / p2.n_quad
+
+    order_12 = p1.n_quad
+    for pt in p2.points
+        norm(pt .- center_p1) <= r1 || continue
+        order_12 = max(order_12, BI.check_quad_order3d(p1, pt, atol, max_order))
+    end
+
+    order_21 = p2.n_quad
+    for pt in p1.points
+        norm(pt .- center_p2) <= r2 || continue
+        order_21 = max(order_21, BI.check_quad_order3d(p2, pt, atol, max_order))
+    end
 
     @test order_12 > p1.n_quad
     @test order_21 > p2.n_quad
@@ -211,6 +225,36 @@ end
     @test isempty(neighbors_skip)
 end
 
+@testset "build_neighbor_list same surface skip" begin
+    ns, ws = gausslegendre(2)
+    ns = Float64.(ns)
+    ws = Float64.(ws)
+
+    normal = (0.0, 0.0, 1.0)
+    p1 = BI.rect_panel3d_discretize(
+        (-0.5, -0.5, 0.0),
+        (0.0, -0.5, 0.0),
+        (0.0, 0.0, 0.0),
+        (-0.5, 0.0, 0.0),
+        ns,
+        ws,
+        normal,
+    )
+    p2 = BI.rect_panel3d_discretize(
+        (0.1, 0.1, 0.0),
+        (0.6, 0.1, 0.0),
+        (0.6, 0.6, 0.0),
+        (0.1, 0.6, 0.0),
+        ns,
+        ws,
+        normal,
+    )
+
+    interface = BI.DielectricInterface([p1, p2], fill(2.0, 2), fill(1.0, 2))
+    neighbors = BI.build_neighbor_list(interface, 12, 1e-3)
+    @test isempty(neighbors)
+end
+
 @testset "laplace3d_DT_correction_term" begin
     ns, ws = gausslegendre(2)
     ns = Float64.(ns)
@@ -245,10 +289,10 @@ end
         normal,
     )
     p4 = BI.rect_panel3d_discretize(
-        (1.0, 1.0, 1.05),
-        (1.02, 1.0, 1.05),
-        (1.02, 1.02, 1.05),
-        (1.0, 1.02, 1.05),
+        (1.0, 1.0, 1.2),
+        (1.02, 1.0, 1.2),
+        (1.02, 1.02, 1.2),
+        (1.0, 1.02, 1.2),
         ns,
         ws,
         normal,
@@ -323,10 +367,10 @@ end
         normal,
     )
     p4 = BI.rect_panel3d_discretize(
-        (1.0, 1.0, 1.05),
-        (1.02, 1.0, 1.05),
-        (1.02, 1.02, 1.05),
-        (1.0, 1.02, 1.05),
+        (1.0, 1.0, 1.2),
+        (1.02, 1.0, 1.2),
+        (1.02, 1.02, 1.2),
+        (1.0, 1.02, 1.2),
         ns,
         ws,
         normal,
