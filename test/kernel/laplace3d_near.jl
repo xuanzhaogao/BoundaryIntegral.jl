@@ -156,7 +156,7 @@ end
 
     max_order = 12
     atol = 1e-3
-    neighbors = BI.build_neighbor_list(interface, max_order, atol)
+    neighbors = BI.build_neighbor_list(interface, max_order, atol, true, true)
 
     center_p2 = (p2.corners[1] .+ p2.corners[2] .+ p2.corners[3] .+ p2.corners[4]) ./ 4
     center_p1 = (p1.corners[1] .+ p1.corners[2] .+ p1.corners[3] .+ p1.corners[4]) ./ 4
@@ -217,11 +217,11 @@ end
     max_order = 12
     atol = 1e-3
 
-    neighbors_all = BI.build_neighbor_list(interface, max_order, atol; include_edges = true)
+    neighbors_all = BI.build_neighbor_list(interface, max_order, atol, true, true)
     @test haskey(neighbors_all, (1, 2))
     @test haskey(neighbors_all, (2, 1))
 
-    neighbors_skip = BI.build_neighbor_list(interface, max_order, atol; include_edges = false)
+    neighbors_skip = BI.build_neighbor_list(interface, max_order, atol, false, false)
     @test isempty(neighbors_skip)
 end
 
@@ -251,7 +251,7 @@ end
     )
 
     interface = BI.DielectricInterface([p1, p2], fill(2.0, 2), fill(1.0, 2))
-    neighbors = BI.build_neighbor_list(interface, 12, 1e-3)
+    neighbors = BI.build_neighbor_list(interface, 12, 1e-3, true, true)
     @test isempty(neighbors)
 end
 
@@ -299,7 +299,7 @@ end
     )
 
     interface = BI.DielectricInterface([p1, p2, p3, p4], fill(2.0, 4), fill(1.0, 4))
-    neighbors = BI.build_neighbor_list(interface, 12, 1e-3)
+    neighbors = BI.build_neighbor_list(interface, 12, 1e-3, true, true)
     corrections = BI.laplace3d_DT_corrections(interface, neighbors)
 
     cnt = [length(p1.points), length(p2.points), length(p3.points), length(p4.points)]
@@ -381,7 +381,7 @@ end
     tol = 1e-12
     max_order = 12
     corrected = BI.laplace3d_DT_fmm3d_corrected(interface, tol, tol, max_order)
-    neighbors = BI.build_neighbor_list(interface, max_order, tol)
+    neighbors = BI.build_neighbor_list(interface, max_order, tol, true, true)
     corrections = BI.laplace3d_DT_corrections(interface, neighbors)
     base = BI.laplace3d_DT_fmm3d(interface, tol)
 

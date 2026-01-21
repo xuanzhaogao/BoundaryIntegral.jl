@@ -56,8 +56,9 @@ end
 function build_neighbor_list(
     interface::DielectricInterface{P, T},
     max_order::Int,
-    atol::T;
-    include_edges::Bool = true,
+    atol::T,
+    include_edges_src::Bool,
+    include_edges_trg::Bool;
     distance_only::Bool = false,
     range_factor::T = T(5),
 ) where {P <: AbstractPanel, T}
@@ -94,7 +95,7 @@ function build_neighbor_list(
     same_surface_tol = sqrt(eps(T))
 
     for (i, paneli) in enumerate(interface.panels)
-        !include_edges && paneli.is_edge && continue
+        (!include_edges_src && paneli.is_edge) && continue
         l_i = lengths[i]
         n_quad_i = n_quads[i]
         r_i = range_factor * l_i / n_quad_i
@@ -113,7 +114,7 @@ function build_neighbor_list(
 
         for j in keys(panel_dict)
 
-            !include_edges && interface.panels[j].is_edge && continue
+            (!include_edges_trg && interface.panels[j].is_edge) && continue
 
             dot_normals = dot(normals[i], normals[j])
             if dot_normals > 1 - same_surface_tol
@@ -202,7 +203,7 @@ function laplace3d_DT_fmm3d_corrected(
 ) where {P <: AbstractPanel}
     n_points = num_points(interface)
     D_base = laplace3d_DT_fmm3d(interface, fmm_tol)
-    neighbor_list = build_neighbor_list(interface, max_order, up_tol; include_edges = include_edges)
+    neighbor_list = build_neighbor_list(interface, max_order, up_tol, include_edges, include_edges)
     @info "length of neighbor_list: $(length(keys(neighbor_list))) out of $(length(interface.panels)^2)"
     corrections = laplace3d_DT_corrections(interface, neighbor_list)
 

@@ -57,7 +57,7 @@ function viz_3d!(
             if neighbor_max_order === nothing || neighbor_atol === nothing
                 throw(ArgumentError("highlight_panel requires neighbor_list or neighbor_max_order and neighbor_atol"))
             end
-            neighbor_list = build_neighbor_list(interface, neighbor_max_order, neighbor_atol)
+            neighbor_list = build_neighbor_list(interface, neighbor_max_order, neighbor_atol, true, true)
         end
         for ((i, j), _) in neighbor_list
             i == highlight_panel || continue
