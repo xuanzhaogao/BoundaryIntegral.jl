@@ -100,9 +100,19 @@ function build_neighbor_list(
         r_i = range_factor * l_i / n_quad_i
         nearby = inrange(tree, centers[:, i], r_i)
 
+        panel_dict = Dict{Int, Vector{Int}}()
         for point_id in nearby
             j = point_panel_idx[point_id]
             i == j && continue
+            if haskey(panel_dict, j)
+                push!(panel_dict[j], point_id)
+            else
+                panel_dict[j] = [point_id]
+            end
+        end
+
+        for j in keys(panel_dict)
+
             !include_edges && interface.panels[j].is_edge && continue
 
             dot_normals = dot(normals[i], normals[j])
@@ -115,7 +125,19 @@ function build_neighbor_list(
             if distance_only
                 neighbor_list[(i, j)] = n_quad_i
             else
-                order_i = check_quad_order3d(paneli, (points[1, point_id], points[2, point_id], points[3, point_id]), atol, max_order)
+                # find the closest point in panel j to panel i
+                points_j = panel_dict[j]
+                min_dist = Inf
+                min_point_id = 0
+                for point_id in points_j
+                    dist = norm(points[:, point_id] - centers[:, i])
+                    if dist < min_dist
+                        min_dist = dist
+                        min_point_id = point_id
+                    end
+                end
+
+                order_i = check_quad_order3d(paneli, (points[1, min_point_id], points[2, min_point_id], points[3, min_point_id]), atol, max_order)
 
                 if order_i > n_quad_i
                     key = (i, j)
