@@ -1,40 +1,57 @@
-function legendre_p(n::Int, x)
-    if n == 0
-        return one(x)
-    elseif n == 1
-        return x
+function legendre_basis_pl(ns::AbstractVector{T}, n_quad::Int) where T
+    n_quad_up = length(ns)
+    basis = Matrix{T}(undef, n_quad + 1, n_quad_up)
+    for i in 0:n_quad
+        for k in 1:n_quad_up
+            basis[i + 1, k] = Pl(ns[k], i)
+        end
     end
-    p_nm2 = one(x)
-    p_nm1 = x
-    for k in 2:n
-        p_n = ((2 * k - 1) * x * p_nm1 - (k - 1) * p_nm2) / k
-        p_nm2 = p_nm1
-        p_nm1 = p_n
+    return basis
+end
+
+function legendre_basis_recurrence(ns::AbstractVector{T}, n_quad::Int) where T
+    n_quad_up = length(ns)
+    basis = Matrix{T}(undef, n_quad + 1, n_quad_up)
+    for k in 1:n_quad_up
+        x = ns[k]
+        basis[1, k] = one(T)
+        if n_quad >= 1
+            basis[2, k] = x
+        end
+        for i in 2:n_quad
+            basis[i + 1, k] = ((2 * i - 1) * x * basis[i, k] - (i - 1) * basis[i - 1, k]) / i
+        end
     end
-    return p_nm1
+    return basis
 end
 
 function int_laplace3d_grad(n_quad::Int, n_quad_up::Int, panel::FlatPanel{T, 3}, trg::NTuple{3, T}) where T
     ns, ws = gausslegendre(n_quad_up)
     a, b, c, d = panel.corners
     cc = (a .+ b .+ c .+ d) ./ 4
-    Lx = norm(b .- a)
+    bma = b .- a
+    dma = d .- a
+    Lx = norm(bma)
     Ly = norm(c .- a)
-    val = zeros(T, n_quad + 1, n_quad + 1)
-    for i in 0:n_quad
-        for j in 0:n_quad
-            # f = (x, y) -> legendre_p(i, x) * legendre_p(j, y)
-            f = (x, y) -> Pl(x, i) * Pl(y, j)
-            val_ij = zero(T)
-            for k in 1:n_quad_up
-                for l in 1:n_quad_up
-                    p = cc .+ (b .- a) .* (ns[k] / 2) .+ (d .- a) .* (ns[l] / 2)
-                    val_ij += ws[k] * ws[l] * f(ns[k], ns[l]) * laplace3d_grad(p, trg, panel.normal) * Lx * Ly / 4
-                end
-            end
-            val[i + 1, j + 1] = val_ij
+    scale = Lx * Ly / 4
+
+    basis = legendre_basis_recurrence(ns, n_quad)
+
+    weighted = Matrix{T}(undef, n_quad_up, n_quad_up)
+    normal = panel.normal
+    for k in 1:n_quad_up
+        x = ns[k] / 2
+        for l in 1:n_quad_up
+            y = ns[l] / 2
+            p = cc .+ bma .* x .+ dma .* y
+            weighted[k, l] = ws[k] * ws[l] * laplace3d_grad(p, trg, normal) * scale
         end
     end
+
+    temp = Matrix{T}(undef, n_quad + 1, n_quad_up)
+    mul!(temp, basis, weighted)
+    val = Matrix{T}(undef, n_quad + 1, n_quad + 1)
+    mul!(val, temp, transpose(basis))
     return val
 end
 
