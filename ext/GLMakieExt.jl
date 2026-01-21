@@ -60,11 +60,8 @@ function viz_3d!(
             neighbor_list = build_neighbor_list(interface, neighbor_max_order, neighbor_atol)
         end
         for ((i, j), _) in neighbor_list
-            if i == highlight_panel
-                push!(neighbor_indices, j)
-            elseif j == highlight_panel
-                push!(neighbor_indices, i)
-            end
+            i == highlight_panel || continue
+            push!(neighbor_indices, j)
         end
     end
 

@@ -58,6 +58,8 @@ function build_neighbor_list(
     max_order::Int,
     atol::T;
     include_edges::Bool = true,
+    distance_only::Bool = false,
+    range_factor::T = T(5),
 ) where {P <: AbstractPanel, T}
     neighbor_list = Dict{Tuple{Int, Int}, Int}()
     n_panels = length(interface.panels)
@@ -87,7 +89,7 @@ function build_neighbor_list(
             point_idx += 1
         end
     end
-    tree = KDTree(points)
+    tree = BallTree(points)
 
     same_surface_tol = sqrt(eps(T))
 
@@ -95,7 +97,7 @@ function build_neighbor_list(
         !include_edges && paneli.is_edge && continue
         l_i = lengths[i]
         n_quad_i = n_quads[i]
-        r_i = 10 * l_i / n_quad_i
+        r_i = range_factor * l_i / n_quad_i
         nearby = inrange(tree, centers[:, i], r_i)
 
         for point_id in nearby
@@ -110,14 +112,19 @@ function build_neighbor_list(
                 end
             end
 
-            # neighbor_list[(i, j)] = n_quad_i
+            if distance_only
+                neighbor_list[(i, j)] = n_quad_i
+            else
+                order_i = check_quad_order3d(paneli, (points[1, point_id], points[2, point_id], points[3, point_id]), atol, max_order)
 
-            order_i = check_quad_order3d(paneli, (points[1, point_id], points[2, point_id], points[3, point_id]), atol, max_order)
-
-            if order_i > n_quad_i
-                key = (i, j)
-                prev = get(neighbor_list, key, n_quad_i)
-                neighbor_list[key] = max(prev, order_i)
+                if order_i > n_quad_i
+                    key = (i, j)
+                    if haskey(neighbor_list, key) 
+                        neighbor_list[key] = max(neighbor_list[key], order_i)
+                    else
+                        neighbor_list[key] = order_i
+                    end
+                end
             end
         end
     end
