@@ -3,7 +3,7 @@ module BoundaryIntegral
 using LinearAlgebra
 using SparseArrays
 using FastGaussQuadrature, LegendrePolynomials
-using Krylov, LinearMaps, Roots
+using Krylov, LinearMaps, Roots, HCubature
 using NearestNeighbors
 
 using FMM2D, FMM3D
@@ -23,6 +23,7 @@ export laplace3d_pot, laplace3d_grad
 export laplace3d_S, laplace3d_D, laplace3d_DT, laplace3d_pottrg
 export laplace3d_S_fmm3d, laplace3d_DT_fmm3d, laplace3d_D_fmm3d, laplace3d_pottrg_fmm3d
 export laplace3d_DT_fmm3d_corrected
+export laplace3d_pottrg_near
 
 # shapes
 export single_dielectric_box2d, multi_dielectric_box2d

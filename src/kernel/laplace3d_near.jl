@@ -211,3 +211,63 @@ function laplace3d_DT_fmm3d_corrected(
     f = charges -> (D_base * charges) + (corrections * charges)
     return LinearMap{Float64}(f, n_points, n_points)
 end
+
+function laplace3d_pottrg_near(interface::DielectricInterface{P, T}, target::NTuple{3, T}, sol::AbstractVector{T}, atol::T; range_factor::T = T(5)) where {P <: AbstractPanel, T}
+    n_panels = length(interface.panels)
+    panel_counts = zeros(Int, n_panels)
+    for i in 1:n_panels
+        panel_counts[i] = length(interface.panels[i].points)
+    end
+    offsets = cumsum(vcat(0, panel_counts))
+    @assert offsets[end] == length(sol)
+
+    val = zero(T)
+    for (i, panel) in enumerate(interface.panels)
+        n_quad = panel.n_quad
+        a, b, c, d = panel.corners
+        cc = (a .+ b .+ c .+ d) ./ 4
+        Lx = norm(b .- a)
+        Ly = norm(d .- a)
+        l_panel = max(Lx, Ly)
+        r_i = range_factor * l_panel / n_quad
+        dist = norm(cc .- target)
+        idx_start = offsets[i] + 1
+        idx_end = offsets[i + 1]
+        sol_panel = @view sol[idx_start:idx_end]
+
+        if dist > r_i
+            for (j, point) in enumerate(eachpoint(panel))
+                val += sol_panel[j] * point.weight * laplace3d_pot(point.point, target)
+            end
+        else
+            ns = panel.gl_xs
+            ws = panel.gl_ws
+            λ = gl_barycentric_weights(ns, ws)
+            bma = b .- a
+            dma = d .- a
+            scale = Lx * Ly / 4
+
+            function integrand(x)
+                u = x[1]
+                v = x[2]
+                rx = barycentric_row(ns, λ, u)
+                ry = barycentric_row(ns, λ, v)
+                dens = zero(T)
+                idx = 1
+                for ii in 1:n_quad
+                    for jj in 1:n_quad
+                        dens += sol_panel[idx] * rx[ii] * ry[jj]
+                        idx += 1
+                    end
+                end
+                p = cc .+ bma .* (u / 2) .+ dma .* (v / 2)
+                return dens * laplace3d_pot(p, target) * scale
+            end
+
+            res, _ = hcubature(integrand, T[-1, -1], T[1, 1]; atol = atol)
+            val += res
+        end
+    end
+
+    return val
+end
