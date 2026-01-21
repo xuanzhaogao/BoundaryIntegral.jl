@@ -4,13 +4,11 @@
 - `src/` holds the BoundaryIntegral.jl module and submodules (`core/`, `kernel/`, `solver/`, `shape/`, `utils/`, `visualization/`).
 - `test/` mirrors `src/` with focused test files and a `test/runtests.jl` entry point.
 - `docs/` contains Documenter.jl sources and build script.
-- `example/` includes runnable demos and example-specific `Project.toml`.
 - `ext/` provides optional integrations (e.g., `GLMakieExt.jl`).
 
 ## Build, Test, and Development Commands
 - Instantiate deps: `julia --project -e 'using Pkg; Pkg.instantiate()'`
 - Run tests: `julia --project -e 'using Pkg; Pkg.test()'`
-- Run a demo: `julia --project=example example/box2d.jl`
 - Build docs locally: `julia --project=docs docs/make.jl`
 
 ## Coding Style & Naming Conventions
