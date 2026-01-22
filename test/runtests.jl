@@ -16,6 +16,9 @@ using Test
     include("kernel/laplace3d.jl")
     include("kernel/laplace3d_near.jl")
 
+    # shape functions
+    include("shape/box3d.jl")
+
     # solver functions
     include("solver/dielectric_box2d.jl")
     include("solver/dielectric_box3d.jl")
