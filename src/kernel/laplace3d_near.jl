@@ -35,23 +35,31 @@ function laplace3d_DT_panel_upsampled(panel_src::FlatPanel{T, 3}, panel_trg::Fla
     n_quad = panel_src.n_quad
     np_trg = num_points(panel_trg)
     DT_up = zeros(T, np_trg, n_quad * n_quad)
-    D_weighted = Matrix{T}(undef, n_up, n_up)
-    temp = Matrix{T}(undef, n_quad, n_up)
-    block = Matrix{T}(undef, n_quad, n_quad)
+    nthreads = Base.Threads.maxthreadid()
+    D_weighted = [Matrix{T}(undef, n_up, n_up) for _ in 1:nthreads]
+    temp = [Matrix{T}(undef, n_quad, n_up) for _ in 1:nthreads]
+    block = [Matrix{T}(undef, n_quad, n_quad) for _ in 1:nthreads]
+    points_trg = panel_trg.points
+    normal_trg = panel_trg.normal
 
-    for (ti, point_trg) in enumerate(eachpoint(panel_trg))
+    Base.Threads.@threads for ti in 1:np_trg
+        tid = Base.Threads.threadid()
+        D_weighted_tid = D_weighted[tid]
+        temp_tid = temp[tid]
+        block_tid = block[tid]
+        point_trg = points_trg[ti]
         @inbounds for j in 1:n_up
             y = ns_up[j] / 2
             wy = ws_up[j]
             for i in 1:n_up
                 x = ns_up[i] / 2
                 p = cc .+ bma .* x .+ dma .* y
-                D_weighted[i, j] = laplace3d_grad(p, point_trg.point, point_trg.normal) * (ws_up[i] * wy * scale)
+                D_weighted_tid[i, j] = laplace3d_grad(p, point_trg, normal_trg) * (ws_up[i] * wy * scale)
             end
         end
-        mul!(temp, transpose(Ex), D_weighted)
-        mul!(block, temp, Ey)
-        @views DT_up[ti, :] .= vec(block)
+        mul!(temp_tid, transpose(Ex), D_weighted_tid)
+        mul!(block_tid, temp_tid, Ey)
+        @views DT_up[ti, :] .= vec(block_tid)
     end
 
     return DT_up
