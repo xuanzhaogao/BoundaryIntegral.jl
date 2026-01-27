@@ -154,12 +154,48 @@ function rhs_panel3d_integral(tpl::TempPanel3D{T}, rhs::Function, n_quad::Int) w
     return val
 end
 
-function rhs_panel3d_resolved(tpl::TempPanel3D{T}, rhs::Function, n_quad::Int, n_quad_up::Int, rtol::T, atol::T) where T
-    n_quad_up = max(n_quad_up, 2 * n_quad)
-    val = rhs_panel3d_integral(tpl, rhs, n_quad)
-    val_up = rhs_panel3d_integral(tpl, rhs, n_quad_up)
-    err = abs(val_up - val)
-    return err <= max(atol, rtol * abs(val_up))
+function rhs_panel3d_resolved(tpl::TempPanel3D{T}, rhs::Function, n_quad::Int, atol::T) where T
+    ns, ws = gausslegendre(n_quad)
+    a, b, c, d = tpl.a, tpl.b, tpl.c, tpl.d
+    cc = (a .+ b .+ c .+ d) ./ 4
+    bma = b .- a
+    dma = d .- a
+
+    vals = Matrix{T}(undef, n_quad, n_quad)
+    for i in 1:n_quad
+        u = ns[i]
+        for j in 1:n_quad
+            v = ns[j]
+            p = cc .+ bma .* (u / 2) .+ dma .* (v / 2)
+            vals[i, j] = T(rhs(p, tpl.normal))
+        end
+    end
+
+    λ = gl_barycentric_weights(ns, ws)
+    n_pts = 10
+    xs = range(-one(T), one(T); length = n_pts)
+    ys = range(-one(T), one(T); length = n_pts)
+
+    err = zero(T)
+    max_ref = zero(T)
+    for u in xs
+        rx = T.(barycentric_row(ns, λ, u))
+        for v in ys
+            ry = T.(barycentric_row(ns, λ, v))
+            approx = zero(T)
+            for i in 1:n_quad
+                for j in 1:n_quad
+                    approx += vals[i, j] * rx[i] * ry[j]
+                end
+            end
+            p = cc .+ bma .* (u / 2) .+ dma .* (v / 2)
+            exact = T(rhs(p, tpl.normal))
+            err = max(err, abs(exact - approx))
+            max_ref = max(max_ref, abs(exact))
+        end
+    end
+
+    return err <= atol
 end
 
 function rect_panel3d_rhs_adaptive_panels(
@@ -174,10 +210,8 @@ function rect_panel3d_rhs_adaptive_panels(
     is_corner::NTuple{4, Bool},
     alpha::T,
     l_ec::T,
-    rhs_rtol::T,
     rhs_atol::T,
     max_depth::Int;
-    n_quad_up::Int = 2 * n_quad,
 ) where T
     ns, ws = gausslegendre(n_quad)
     Lab = norm(b .- a)
@@ -193,7 +227,7 @@ function rect_panel3d_rhs_adaptive_panels(
 
     while !isempty(stack)
         tpl, depth = pop!(stack)
-        if depth >= max_depth || rhs_panel3d_resolved(tpl, rhs, n_quad, n_quad_up, rhs_rtol, rhs_atol)
+        if depth >= max_depth || rhs_panel3d_resolved(tpl, rhs, n_quad, rhs_atol)
             push!(fine, tpl)
         else
             for child in divide_temp_panel3d(tpl, 2, 2)
@@ -287,13 +321,11 @@ function single_dielectric_box3d_rhs_adaptive(
     n_quad::Int,
     rhs::Function,
     l_ec::T,
-    rhs_rtol::T,
+    rhs_atol::T,
     eps_in::T,
     eps_out::T,
     ::Type{T} = Float64;
-    rhs_atol::T = zero(T),
     max_depth::Int = 8,
-    n_quad_up::Int = 2 * n_quad,
     alpha::T = sqrt(T(2)),
 ) where T
     t1 = one(T)
@@ -345,10 +377,8 @@ function single_dielectric_box3d_rhs_adaptive(
             (true, true, true, true),
             alpha,
             l_ec,
-            rhs_rtol,
             rhs_atol,
             max_depth;
-            n_quad_up = n_quad_up,
         ))
     end
 
@@ -363,13 +393,11 @@ function single_dielectric_box3d_rhs_adaptive(
     ps::PointSource{T, 3},
     eps_src::T,
     l_ec::T,
-    rhs_rtol::T,
+    rhs_atol::T,
     eps_in::T,
     eps_out::T,
     ::Type{T} = Float64;
-    rhs_atol::T = zero(T),
     max_depth::Int = 8,
-    n_quad_up::Int = 2 * n_quad,
     alpha::T = sqrt(T(2)),
 ) where T
     rhs(p, n) = -ps.charge * laplace3d_grad(ps.point, p, n) / eps_src
@@ -380,13 +408,11 @@ function single_dielectric_box3d_rhs_adaptive(
         n_quad,
         rhs,
         l_ec,
-        rhs_rtol,
+        rhs_atol,
         eps_in,
         eps_out,
         T;
-        rhs_atol = rhs_atol,
         max_depth = max_depth,
-        n_quad_up = n_quad_up,
         alpha = alpha,
     )
 end
