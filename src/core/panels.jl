@@ -109,3 +109,82 @@ num_points(d::DielectricInterface) = sum(num_points(panel) for panel in d.panels
 all_weights(d::DielectricInterface) = vcat([panel.weights for panel in d.panels]...)
 
 Base.length(it::DielectricInterfaceIterator) = num_points(it.d)
+
+struct PanelRhsInterp{T}
+    cc::NTuple{3, T}
+    bma::NTuple{3, T}
+    dma::NTuple{3, T}
+    inv11::T
+    inv12::T
+    inv22::T
+    scale::T
+    ns::Vector{T}
+    λ::Vector{T}
+    vals::Matrix{T}
+end
+
+function _panel_uv(interp::PanelRhsInterp{T}, p::NTuple{3, T}, tol::T) where T
+    x = p .- interp.cc
+    rhs1 = dot(interp.bma, x)
+    rhs2 = dot(interp.dma, x)
+    s = interp.inv11 * rhs1 + interp.inv12 * rhs2
+    t = interp.inv12 * rhs1 + interp.inv22 * rhs2
+    u = 2 * s
+    v = 2 * t
+    residual = x .- interp.bma .* s .- interp.dma .* t
+    on_plane = norm(residual) <= tol * interp.scale
+    in_panel = abs(u) <= 1 + tol && abs(v) <= 1 + tol
+    return u, v, on_plane && in_panel
+end
+
+function rhs_approx(interface::DielectricInterface{FlatPanel{T, 3}, T}, rhs::Function; tol::T = sqrt(eps(T))) where T
+    interps = Vector{PanelRhsInterp{T}}(undef, length(interface.panels))
+    for (i, panel) in enumerate(interface.panels)
+        ns = panel.gl_xs
+        ws = panel.gl_ws
+        λ = gl_barycentric_weights(ns, ws)
+        a, b, c, d = panel.corners
+        cc = (a .+ b .+ c .+ d) ./ 4
+        bma = b .- a
+        dma = d .- a
+        bb = dot(bma, bma)
+        bd = dot(bma, dma)
+        dd = dot(dma, dma)
+        det = bb * dd - bd * bd
+        inv11 = dd / det
+        inv12 = -bd / det
+        inv22 = bb / det
+        scale = max(norm(bma), norm(dma))
+
+        vals = Matrix{T}(undef, length(ns), length(ns))
+        for ii in eachindex(ns)
+            u = ns[ii]
+            for jj in eachindex(ns)
+                v = ns[jj]
+                p = cc .+ bma .* (u / 2) .+ dma .* (v / 2)
+                vals[ii, jj] = T(rhs(p, panel.normal))
+            end
+        end
+        interps[i] = PanelRhsInterp(cc, bma, dma, inv11, inv12, inv22, scale, ns, λ, vals)
+    end
+
+    function approx(p::NTuple{3, T})
+        for interp in interps
+            u, v, hit = _panel_uv(interp, p, tol)
+            if hit
+                rx = T.(barycentric_row(interp.ns, interp.λ, u))
+                ry = T.(barycentric_row(interp.ns, interp.λ, v))
+                val = zero(T)
+                for ii in eachindex(interp.ns)
+                    for jj in eachindex(interp.ns)
+                        val += interp.vals[ii, jj] * rx[ii] * ry[jj]
+                    end
+                end
+                return val
+            end
+        end
+        error("point is not on any panel within tolerance")
+    end
+
+    return approx
+end

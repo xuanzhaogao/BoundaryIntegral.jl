@@ -91,41 +91,22 @@ end
 
     n_panels_sample = min(10, length(interface.panels))
     panel_indices = rand(rng, 1:length(interface.panels), n_panels_sample)
+    rhs_panel = BI.rhs_approx(interface, ps, eps_src; tol = 1e-8)
     n_points = 20
     for idx in panel_indices
         panel = interface.panels[idx]
-        ns = panel.gl_xs
-        ws = panel.gl_ws
-        λ = BI.gl_barycentric_weights(ns, ws)
         a, b, c, d = panel.corners
         cc = (a .+ b .+ c .+ d) ./ 4
         bma = b .- a
         dma = d .- a
 
-        vals = Matrix{Float64}(undef, length(ns), length(ns))
-        for i in eachindex(ns)
-            u = ns[i]
-            for j in eachindex(ns)
-                v = ns[j]
-                p = cc .+ bma .* (u / 2) .+ dma .* (v / 2)
-                vals[i, j] = rhs(p, panel.normal)
-            end
-        end
-
         max_err = 0.0
         for _ in 1:n_points
             u = rand(rng) * 2 - 1
             v = rand(rng) * 2 - 1
-            rx = BI.barycentric_row(ns, λ, u)
-            ry = BI.barycentric_row(ns, λ, v)
-            approx = 0.0
-            for i in eachindex(ns)
-                for j in eachindex(ns)
-                    approx += vals[i, j] * rx[i] * ry[j]
-                end
-            end
             p = cc .+ bma .* (u / 2) .+ dma .* (v / 2)
             exact = rhs(p, panel.normal)
+            approx = rhs_panel(p)
             max_err = max(max_err, abs(exact - approx))
         end
         @test max_err <= rhs_atol
