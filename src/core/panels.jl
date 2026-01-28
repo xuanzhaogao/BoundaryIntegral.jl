@@ -137,8 +137,10 @@ function _panel_uv(interp::PanelRhsInterp{T}, p::NTuple{3, T}, tol::T) where T
     return u, v, on_plane && in_panel
 end
 
-function rhs_approx(interface::DielectricInterface{FlatPanel{T, 3}, T}, rhs::Function; tol::T = sqrt(eps(T))) where T
+function interface_approx(interface::DielectricInterface{FlatPanel{T, 3}, T}, values::AbstractVector{T}; tol::T = sqrt(eps(T))) where T
+    @assert length(values) == num_points(interface)
     interps = Vector{PanelRhsInterp{T}}(undef, length(interface.panels))
+    offset = 0
     for (i, panel) in enumerate(interface.panels)
         ns = panel.gl_xs
         ws = panel.gl_ws
@@ -156,15 +158,17 @@ function rhs_approx(interface::DielectricInterface{FlatPanel{T, 3}, T}, rhs::Fun
         inv22 = bb / det
         scale = max(norm(bma), norm(dma))
 
-        vals = Matrix{T}(undef, length(ns), length(ns))
-        for ii in eachindex(ns)
-            u = ns[ii]
-            for jj in eachindex(ns)
-                v = ns[jj]
-                p = cc .+ bma .* (u / 2) .+ dma .* (v / 2)
-                vals[ii, jj] = T(rhs(p, panel.normal))
+        n_quad = panel.n_quad
+        vals = Matrix{T}(undef, n_quad, n_quad)
+        idx = offset + 1
+        for ii in 1:n_quad
+            for jj in 1:n_quad
+                vals[ii, jj] = values[idx]
+                idx += 1
             end
         end
+        offset += n_quad * n_quad
+
         interps[i] = PanelRhsInterp(cc, bma, dma, inv11, inv12, inv22, scale, ns, λ, vals)
     end
 
@@ -187,4 +191,12 @@ function rhs_approx(interface::DielectricInterface{FlatPanel{T, 3}, T}, rhs::Fun
     end
 
     return approx
+end
+
+function rhs_approx(interface::DielectricInterface{FlatPanel{T, 3}, T}, rhs::Function; tol::T = sqrt(eps(T))) where T
+    values = Vector{T}(undef, num_points(interface))
+    for (i, point) in enumerate(eachpoint(interface))
+        values[i] = T(rhs(point.panel_point.point, point.panel_point.normal))
+    end
+    return interface_approx(interface, values; tol = tol)
 end

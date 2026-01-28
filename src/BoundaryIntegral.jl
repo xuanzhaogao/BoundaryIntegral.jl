@@ -12,6 +12,7 @@ using FMM2D, FMM3D
 export FlatPanel
 export DielectricInterface
 export rhs_approx
+export interface_approx
 
 export PointSource
 

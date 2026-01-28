@@ -92,6 +92,8 @@ end
     n_panels_sample = min(10, length(interface.panels))
     panel_indices = rand(rng, 1:length(interface.panels), n_panels_sample)
     rhs_panel = BI.rhs_approx(interface, ps, eps_src; tol = 1e-8)
+    rhs_vals = [rhs(point.panel_point.point, point.panel_point.normal) for point in BI.eachpoint(interface)]
+    rhs_panel_vals = BI.interface_approx(interface, rhs_vals; tol = 1e-8)
     n_points = 20
     for idx in panel_indices
         panel = interface.panels[idx]
@@ -107,6 +109,8 @@ end
             p = cc .+ bma .* (u / 2) .+ dma .* (v / 2)
             exact = rhs(p, panel.normal)
             approx = rhs_panel(p)
+            approx_vals = rhs_panel_vals(p)
+            max_err = max(max_err, abs(exact - approx_vals))
             max_err = max(max_err, abs(exact - approx))
         end
         @test max_err <= rhs_atol
