@@ -1,19 +1,43 @@
-function laplace3d_DT_panel(panel_src::FlatPanel{T, 3}, panel_trg::FlatPanel{T, 3}) where T
+function laplace3d_panel_kernel(panel_src::FlatPanel{T, 3}, panel_trg::FlatPanel{T, 3}, mode::Symbol) where T
 
     np_src = num_points(panel_src)
     np_trg = num_points(panel_trg)
 
-    DT = zeros(T, np_trg, np_src)
-    for (i, pointi) in enumerate(eachpoint(panel_src))
-        for (j, pointj) in enumerate(eachpoint(panel_trg))
-            DT[j, i] = laplace3d_grad(pointi.point, pointj.point, pointj.normal)
+    K = zeros(T, np_trg, np_src)
+    if mode === :DT
+        for (i, pointi) in enumerate(eachpoint(panel_src))
+            for (j, pointj) in enumerate(eachpoint(panel_trg))
+                K[j, i] = laplace3d_grad(pointi.point, pointj.point, pointj.normal)
+            end
         end
+    elseif mode === :D
+        for (i, pointi) in enumerate(eachpoint(panel_src))
+            for (j, pointj) in enumerate(eachpoint(panel_trg))
+                K[j, i] = laplace3d_grad(pointj.point, pointi.point, pointi.normal)
+            end
+        end
+    else
+        error("unknown mode for laplace3d_panel_kernel")
     end
+    return K
+end
+
+function laplace3d_DT_panel(panel_src::FlatPanel{T, 3}, panel_trg::FlatPanel{T, 3}) where T
+    DT = laplace3d_panel_kernel(panel_src, panel_trg, :DT)
     return DT * diagm(panel_src.weights)
+end
+
+function laplace3d_D_panel(panel_src::FlatPanel{T, 3}, panel_trg::FlatPanel{T, 3}) where T
+    D = laplace3d_panel_kernel(panel_src, panel_trg, :D)
+    return D * diagm(panel_src.weights)
 end
 
 # this function generate a block of the correction matrix
 function laplace3d_DT_panel_upsampled(panel_src::FlatPanel{T, 3}, panel_trg::FlatPanel{T, 3}, n_up::Int) where T
+    return laplace3d_panel_upsampled(panel_src, panel_trg, n_up, :DT)
+end
+
+function laplace3d_panel_upsampled(panel_src::FlatPanel{T, 3}, panel_trg::FlatPanel{T, 3}, n_up::Int, mode::Symbol) where T
     ns_up, ws_up = gausslegendre(n_up)
     ns_up = T.(ns_up)
     ws_up = T.(ws_up)
@@ -34,13 +58,12 @@ function laplace3d_DT_panel_upsampled(panel_src::FlatPanel{T, 3}, panel_trg::Fla
     dma = d .- a
     n_quad = panel_src.n_quad
     np_trg = num_points(panel_trg)
-    DT_up = zeros(T, np_trg, n_quad * n_quad)
+    K_up = zeros(T, np_trg, n_quad * n_quad)
     nthreads = Base.Threads.maxthreadid()
     D_weighted = [Matrix{T}(undef, n_up, n_up) for _ in 1:nthreads]
     temp = [Matrix{T}(undef, n_quad, n_up) for _ in 1:nthreads]
     block = [Matrix{T}(undef, n_quad, n_quad) for _ in 1:nthreads]
     points_trg = panel_trg.points
-    normal_trg = panel_trg.normal
 
     Base.Threads.@threads for ti in 1:np_trg
         tid = Base.Threads.threadid()
@@ -54,15 +77,25 @@ function laplace3d_DT_panel_upsampled(panel_src::FlatPanel{T, 3}, panel_trg::Fla
             for i in 1:n_up
                 x = ns_up[i] / 2
                 p = cc .+ bma .* x .+ dma .* y
-                D_weighted_tid[i, j] = laplace3d_grad(p, point_trg, normal_trg) * (ws_up[i] * wy * scale)
+                if mode === :DT
+                    D_weighted_tid[i, j] = laplace3d_grad(p, point_trg, panel_trg.normal) * (ws_up[i] * wy * scale)
+                elseif mode === :D
+                    D_weighted_tid[i, j] = laplace3d_grad(point_trg, p, panel_src.normal) * (ws_up[i] * wy * scale)
+                else
+                    error("unknown mode for laplace3d_panel_upsampled")
+                end
             end
         end
         mul!(temp_tid, transpose(Ex), D_weighted_tid)
         mul!(block_tid, temp_tid, Ey)
-        @views DT_up[ti, :] .= vec(block_tid)
+        @views K_up[ti, :] .= vec(block_tid)
     end
 
-    return DT_up
+    return K_up
+end
+
+function laplace3d_D_panel_upsampled(panel_src::FlatPanel{T, 3}, panel_trg::FlatPanel{T, 3}, n_up::Int) where T
+    return laplace3d_panel_upsampled(panel_src, panel_trg, n_up, :D)
 end
 
 function laplace3d_DT_panel_hcubature(panel_src::FlatPanel{T, 3}, panel_trg::FlatPanel{T, 3}, atol::T) where T
@@ -250,6 +283,43 @@ function laplace3d_DT_corrections(interface::DielectricInterface{P, T}, neighbor
     return sparse(rows, cols, vals, total_n, total_n)
 end
 
+function laplace3d_D_corrections(interface::DielectricInterface{P, T}, neighbor_list::Dict{Tuple{Int, Int}, Int}) where {P <: AbstractPanel, T}
+
+    cnt = zeros(Int, length(interface.panels))
+    for i in 1:length(interface.panels)
+        cnt[i] = length(interface.panels[i].points)
+    end
+    offsets = cumsum(vcat(0, cnt))
+    total_n = offsets[end]
+
+    rows = Int[]
+    cols = Int[]
+    vals = T[]
+
+    for ((i, j), n_up) in neighbor_list
+        panel_src = interface.panels[i]
+        panel_trg = interface.panels[j]
+
+        D_up = laplace3d_D_panel_upsampled(panel_src, panel_trg, n_up)
+        D_direct = laplace3d_D_panel(panel_src, panel_trg)
+        block = D_up - D_direct
+
+        row_range = (offsets[j] + 1):offsets[j + 1]
+        col_range = (offsets[i] + 1):offsets[i + 1]
+
+        for (r_local, r) in enumerate(row_range)
+            for (c_local, c) in enumerate(col_range)
+                v = block[r_local, c_local]
+                iszero(v) && continue
+                push!(rows, r)
+                push!(cols, c)
+                push!(vals, v)
+            end
+        end
+    end
+
+    return sparse(rows, cols, vals, total_n, total_n)
+end
 function laplace3d_DT_corrections_hcubature(
     interface::DielectricInterface{P, T},
     neighbor_list::Dict{Tuple{Int, Int}, Int},
@@ -323,9 +393,9 @@ function laplace3d_D_fmm3d_corrected(
     D_base = laplace3d_D_fmm3d(interface, fmm_tol)
     neighbor_list = build_neighbor_list(interface, max_order, up_tol, include_edges_src, include_edges_trg)
     @info "length of neighbor_list: $(length(keys(neighbor_list))) out of $(length(interface.panels)^2)"
-    corrections = laplace3d_DT_corrections(interface, neighbor_list)
+    corrections = laplace3d_D_corrections(interface, neighbor_list)
 
-    f = charges -> (D_base * charges) + (corrections' * charges)
+    f = charges -> (D_base * charges) + (corrections * charges)
     return LinearMap{Float64}(f, n_points, n_points)
 end
 

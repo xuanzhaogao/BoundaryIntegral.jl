@@ -508,7 +508,7 @@ end
     max_order = 12
     corrected = BI.laplace3d_D_fmm3d_corrected(interface, tol, tol, max_order)
     neighbors = BI.build_neighbor_list(interface, max_order, tol, true, true)
-    corrections = BI.laplace3d_DT_corrections(interface, neighbors)
+    corrections = BI.laplace3d_D_corrections(interface, neighbors)
     base = BI.laplace3d_D_fmm3d(interface, tol)
 
     n = BI.num_points(interface)
@@ -517,7 +517,7 @@ end
         rho[i] = cos(0.2 * i)
     end
 
-    expected = base * rho + corrections' * rho
+    expected = base * rho + corrections * rho
     got = corrected * rho
 
     @test norm(got - expected, Inf) < 1e-10
