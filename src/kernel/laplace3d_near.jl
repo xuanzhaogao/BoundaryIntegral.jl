@@ -298,8 +298,8 @@ function laplace3d_DT_fmm3d_corrected(
     fmm_tol::Float64,
     up_tol::Float64,
     max_order::Int;
-    include_edges_src::Bool = true,
-    include_edges_trg::Bool = true,
+    include_edges_src::Bool = false,
+    include_edges_trg::Bool = false,
 ) where {P <: AbstractPanel}
     n_points = num_points(interface)
     D_base = laplace3d_DT_fmm3d(interface, fmm_tol)
