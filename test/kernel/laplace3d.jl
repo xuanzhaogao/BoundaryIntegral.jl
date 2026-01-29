@@ -36,6 +36,15 @@ end
     @test norm(DT_direct * charges - DT_fmm * charges) < 1e-8
 end
 
+@testset "laplace3d D constant density" begin
+    interface = box3d_interface()
+    D = BI.laplace3d_D(interface)
+    D[diagind(D)] .= 0.0
+    n = BI.num_points(interface)
+    vals = D * ones(Float64, n)
+    @test dot(abs.(vals .- 0.5), BI.all_weights(interface)) < 1e-1
+end
+
 function direct_D_trg(points, normals, weights, targets, charges)
     n = length(points)
     m = size(targets, 2)

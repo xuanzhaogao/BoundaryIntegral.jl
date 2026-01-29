@@ -458,3 +458,67 @@ end
 
     @test norm(corrected_hcub * rho - corrected_up * rho, Inf) < 1e-8
 end
+
+@testset "laplace3d_D_fmm3d_corrected" begin
+    ns, ws = gausslegendre(2)
+    ns = Float64.(ns)
+    ws = Float64.(ws)
+
+    normal = (0.0, 0.0, 1.0)
+    p1 = BI.rect_panel3d_discretize(
+        (-0.5, -0.5, 0.0),
+        (0.5, -0.5, 0.0),
+        (0.5, 0.5, 0.0),
+        (-0.5, 0.5, 0.0),
+        ns,
+        ws,
+        normal,
+    )
+    p2 = BI.rect_panel3d_discretize(
+        (-0.5, -0.5, 0.2),
+        (0.5, -0.5, 0.2),
+        (0.5, 0.5, 0.2),
+        (-0.5, 0.5, 0.2),
+        ns,
+        ws,
+        normal,
+    )
+    p3 = BI.rect_panel3d_discretize(
+        (1.0, 1.0, 1.0),
+        (1.02, 1.0, 1.0),
+        (1.02, 1.02, 1.0),
+        (1.0, 1.02, 1.0),
+        ns,
+        ws,
+        normal,
+    )
+    p4 = BI.rect_panel3d_discretize(
+        (1.0, 1.0, 1.2),
+        (1.02, 1.0, 1.2),
+        (1.02, 1.02, 1.2),
+        (1.0, 1.02, 1.2),
+        ns,
+        ws,
+        normal,
+    )
+
+    interface = BI.DielectricInterface([p1, p2, p3, p4], fill(2.0, 4), fill(1.0, 4))
+
+    tol = 1e-12
+    max_order = 12
+    corrected = BI.laplace3d_D_fmm3d_corrected(interface, tol, tol, max_order)
+    neighbors = BI.build_neighbor_list(interface, max_order, tol, true, true)
+    corrections = BI.laplace3d_DT_corrections(interface, neighbors)
+    base = BI.laplace3d_D_fmm3d(interface, tol)
+
+    n = BI.num_points(interface)
+    rho = zeros(Float64, n)
+    for i in 1:n
+        rho[i] = cos(0.2 * i)
+    end
+
+    expected = base * rho + corrections' * rho
+    got = corrected * rho
+
+    @test norm(got - expected, Inf) < 1e-10
+end

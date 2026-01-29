@@ -311,6 +311,24 @@ function laplace3d_DT_fmm3d_corrected(
     return LinearMap{Float64}(f, n_points, n_points)
 end
 
+function laplace3d_D_fmm3d_corrected(
+    interface::DielectricInterface{P, Float64},
+    fmm_tol::Float64,
+    up_tol::Float64,
+    max_order::Int;
+    include_edges_src::Bool = false,
+    include_edges_trg::Bool = false,
+) where {P <: AbstractPanel}
+    n_points = num_points(interface)
+    D_base = laplace3d_D_fmm3d(interface, fmm_tol)
+    neighbor_list = build_neighbor_list(interface, max_order, up_tol, include_edges_src, include_edges_trg)
+    @info "length of neighbor_list: $(length(keys(neighbor_list))) out of $(length(interface.panels)^2)"
+    corrections = laplace3d_DT_corrections(interface, neighbor_list)
+
+    f = charges -> (D_base * charges) + (corrections' * charges)
+    return LinearMap{Float64}(f, n_points, n_points)
+end
+
 function laplace3d_DT_fmm3d_corrected_hcubature(
     interface::DielectricInterface{P, Float64},
     fmm_tol::Float64,
