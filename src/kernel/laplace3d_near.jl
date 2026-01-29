@@ -65,6 +65,50 @@ function laplace3d_DT_panel_upsampled(panel_src::FlatPanel{T, 3}, panel_trg::Fla
     return DT_up
 end
 
+function laplace3d_DT_panel_hcubature(panel_src::FlatPanel{T, 3}, panel_trg::FlatPanel{T, 3}, atol::T) where T
+    ns = panel_src.gl_xs
+    ws = panel_src.gl_ws
+    λ = gl_barycentric_weights(ns, ws)
+    a, b, c, d = panel_src.corners
+    cc = (a .+ b .+ c .+ d) ./ 4
+    bma = b .- a
+    dma = d .- a
+    Lx = norm(b .- a)
+    Ly = norm(d .- a)
+    scale = Lx * Ly / 4
+
+    n_quad = panel_src.n_quad
+    np_trg = num_points(panel_trg)
+    DT_exact = zeros(T, np_trg, n_quad * n_quad)
+    points_trg = panel_trg.points
+    normal_trg = panel_trg.normal
+
+    for ti in 1:np_trg
+        point_trg = points_trg[ti]
+        function integrand(x)
+            u = x[1]
+            v = x[2]
+            rx = T.(barycentric_row(ns, λ, u))
+            ry = T.(barycentric_row(ns, λ, v))
+            p = cc .+ bma .* (u / 2) .+ dma .* (v / 2)
+            k = laplace3d_grad(p, point_trg, normal_trg) * scale
+            vals = Vector{T}(undef, n_quad * n_quad)
+            idx = 1
+            for jj in 1:n_quad
+                for ii in 1:n_quad
+                    vals[idx] = k * rx[ii] * ry[jj]
+                    idx += 1
+                end
+            end
+            return vals
+        end
+        res, _ = hcubature(integrand, T[-1, -1], T[1, 1]; atol = atol)
+        @views DT_exact[ti, :] .= res
+    end
+
+    return DT_exact
+end
+
 # neighbor list describes the pair of panels that are near each other and the order needed for evaluation
 function build_neighbor_list(
     interface::DielectricInterface{P, T},
@@ -206,6 +250,48 @@ function laplace3d_DT_corrections(interface::DielectricInterface{P, T}, neighbor
     return sparse(rows, cols, vals, total_n, total_n)
 end
 
+function laplace3d_DT_corrections_hcubature(
+    interface::DielectricInterface{P, T},
+    neighbor_list::Dict{Tuple{Int, Int}, Int},
+    atol::T,
+) where {P <: AbstractPanel, T}
+
+    cnt = zeros(Int, length(interface.panels))
+    for i in 1:length(interface.panels)
+        cnt[i] = length(interface.panels[i].points)
+    end
+    offsets = cumsum(vcat(0, cnt))
+    total_n = offsets[end]
+
+    rows = Int[]
+    cols = Int[]
+    vals = T[]
+
+    for ((i, j), _) in neighbor_list
+        panel_src = interface.panels[i]
+        panel_trg = interface.panels[j]
+
+        DT_exact = laplace3d_DT_panel_hcubature(panel_src, panel_trg, atol)
+        DT_direct = laplace3d_DT_panel(panel_src, panel_trg)
+        block = DT_exact - DT_direct
+
+        row_range = (offsets[j] + 1):offsets[j + 1]
+        col_range = (offsets[i] + 1):offsets[i + 1]
+
+        for (r_local, r) in enumerate(row_range)
+            for (c_local, c) in enumerate(col_range)
+                v = block[r_local, c_local]
+                iszero(v) && continue
+                push!(rows, r)
+                push!(cols, c)
+                push!(vals, v)
+            end
+        end
+    end
+
+    return sparse(rows, cols, vals, total_n, total_n)
+end
+
 # linear operator for the corrected DT kernel
 function laplace3d_DT_fmm3d_corrected(
     interface::DielectricInterface{P, Float64},
@@ -220,6 +306,24 @@ function laplace3d_DT_fmm3d_corrected(
     neighbor_list = build_neighbor_list(interface, max_order, up_tol, include_edges_src, include_edges_trg)
     @info "length of neighbor_list: $(length(keys(neighbor_list))) out of $(length(interface.panels)^2)"
     corrections = laplace3d_DT_corrections(interface, neighbor_list)
+
+    f = charges -> (D_base * charges) + (corrections * charges)
+    return LinearMap{Float64}(f, n_points, n_points)
+end
+
+function laplace3d_DT_fmm3d_corrected_hcubature(
+    interface::DielectricInterface{P, Float64},
+    fmm_tol::Float64,
+    hcubature_atol::Float64,
+    range_factor::Float64;
+    include_edges_src::Bool = false,
+    include_edges_trg::Bool = false,
+) where {P <: AbstractPanel}
+    n_points = num_points(interface)
+    D_base = laplace3d_DT_fmm3d(interface, fmm_tol)
+    neighbor_list = build_neighbor_list(interface, 1, hcubature_atol, include_edges_src, include_edges_trg, distance_only = true, range_factor = range_factor)
+    @info "length of neighbor_list: $(length(keys(neighbor_list))) out of $(length(interface.panels)^2)"
+    corrections = laplace3d_DT_corrections_hcubature(interface, neighbor_list, hcubature_atol)
 
     f = charges -> (D_base * charges) + (corrections * charges)
     return LinearMap{Float64}(f, n_points, n_points)
