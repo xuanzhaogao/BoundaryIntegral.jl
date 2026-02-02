@@ -32,11 +32,6 @@ function laplace3d_D_panel(panel_src::FlatPanel{T, 3}, panel_trg::FlatPanel{T, 3
     return D * diagm(panel_src.weights)
 end
 
-# this function generate a block of the correction matrix
-function laplace3d_DT_panel_upsampled(panel_src::FlatPanel{T, 3}, panel_trg::FlatPanel{T, 3}, n_up::Int) where T
-    return laplace3d_panel_upsampled(panel_src, panel_trg, n_up, :DT)
-end
-
 function laplace3d_panel_upsampled(panel_src::FlatPanel{T, 3}, panel_trg::FlatPanel{T, 3}, n_up::Int, mode::Symbol) where T
     ns_up, ws_up = gausslegendre(n_up)
     ns_up = T.(ns_up)
@@ -92,6 +87,11 @@ function laplace3d_panel_upsampled(panel_src::FlatPanel{T, 3}, panel_trg::FlatPa
     end
 
     return K_up
+end
+
+# this function generate a block of the correction matrix
+function laplace3d_DT_panel_upsampled(panel_src::FlatPanel{T, 3}, panel_trg::FlatPanel{T, 3}, n_up::Int) where T
+    return laplace3d_panel_upsampled(panel_src, panel_trg, n_up, :DT)
 end
 
 function laplace3d_D_panel_upsampled(panel_src::FlatPanel{T, 3}, panel_trg::FlatPanel{T, 3}, n_up::Int) where T
