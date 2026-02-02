@@ -333,6 +333,37 @@ end
     @test norm(got[(offsets[3] + 1):offsets[5]], Inf) == 0.0
 end
 
+@testset "laplace3d_DT_panel_upsampled_ordering" begin
+    ns, ws = gausslegendre(3)
+    ns = Float64.(ns)
+    ws = Float64.(ws)
+
+    normal = (0.0, 0.0, 1.0)
+    p1 = BI.rect_panel3d_discretize(
+        (-0.5, -0.5, 0.0),
+        (0.5, -0.5, 0.0),
+        (0.5, 0.5, 0.0),
+        (-0.5, 0.5, 0.0),
+        ns,
+        ws,
+        normal,
+    )
+    p2 = BI.rect_panel3d_discretize(
+        (-0.5, -0.5, 0.3),
+        (0.5, -0.5, 0.3),
+        (0.5, 0.5, 0.3),
+        (-0.5, 0.5, 0.3),
+        ns,
+        ws,
+        normal,
+    )
+
+    direct = BI.laplace3d_DT_panel(p1, p2)
+    upsampled = BI.laplace3d_DT_panel_upsampled(p1, p2, p1.n_quad)
+
+    @test norm(upsampled - direct, Inf) < 1e-12
+end
+
 @testset "laplace3d_DT_fmm3d_corrected" begin
     ns, ws = gausslegendre(2)
     ns = Float64.(ns)
@@ -457,6 +488,49 @@ end
     end
 
     @test norm(corrected_hcub * rho - corrected_up * rho, Inf) < 1e-8
+end
+
+@testset "laplace3d_DT_corrections_hcubature_apply" begin
+    ns, ws = gausslegendre(2)
+    ns = Float64.(ns)
+    ws = Float64.(ws)
+
+    normal = (0.0, 0.0, 1.0)
+    p1 = BI.rect_panel3d_discretize(
+        (-0.5, -0.5, 0.0),
+        (0.5, -0.5, 0.0),
+        (0.5, 0.5, 0.0),
+        (-0.5, 0.5, 0.0),
+        ns,
+        ws,
+        normal,
+    )
+    p2 = BI.rect_panel3d_discretize(
+        (-0.5, -0.5, 0.2),
+        (0.5, -0.5, 0.2),
+        (0.5, 0.5, 0.2),
+        (-0.5, 0.5, 0.2),
+        ns,
+        ws,
+        normal,
+    )
+
+    interface = BI.DielectricInterface([p1, p2], fill(2.0, 2), fill(1.0, 2))
+    atol = 1e-8
+    neighbors = BI.build_neighbor_list(interface, 1, atol, true, true; distance_only = true, range_factor = 5.0)
+    corrections = BI.laplace3d_DT_corrections_hcubature(interface, neighbors, atol)
+
+    sigma(p) = p[1] + 2 * p[2] - p[3]
+
+    rho = zeros(Float64, BI.num_points(interface))
+    for (i, point) in enumerate(BI.eachpoint(interface))
+        rho[i] = sigma(point.panel_point.point)
+    end
+
+    expected = corrections * rho
+    got = BI.laplace3d_DT_corrections_hcubature_apply(interface, neighbors, atol, sigma)
+
+    @test norm(got - expected, Inf) < 1e-8
 end
 
 @testset "laplace3d_D_fmm3d_corrected" begin

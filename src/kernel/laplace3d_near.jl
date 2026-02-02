@@ -83,7 +83,14 @@ function laplace3d_panel_upsampled(panel_src::FlatPanel{T, 3}, panel_trg::FlatPa
         end
         mul!(temp_tid, transpose(Ex), D_weighted_tid)
         mul!(block_tid, temp_tid, Ey)
-        @views K_up[ti, :] .= vec(block_tid)
+        # Match panel point ordering (ii outer, jj inner) from rect_panel3d_discretize.
+        idx = 1
+        @inbounds for ii in 1:n_quad
+            for jj in 1:n_quad
+                K_up[ti, idx] = block_tid[ii, jj]
+                idx += 1
+            end
+        end
     end
 
     return K_up
@@ -127,8 +134,8 @@ function laplace3d_DT_panel_hcubature(panel_src::FlatPanel{T, 3}, panel_trg::Fla
             k = laplace3d_grad(p, point_trg, normal_trg) * scale
             vals = Vector{T}(undef, n_quad * n_quad)
             idx = 1
-            for jj in 1:n_quad
-                for ii in 1:n_quad
+            for ii in 1:n_quad
+                for jj in 1:n_quad
                     vals[idx] = k * rx[ii] * ry[jj]
                     idx += 1
                 end
@@ -360,6 +367,72 @@ function laplace3d_DT_corrections_hcubature(
     end
 
     return sparse(rows, cols, vals, total_n, total_n)
+end
+
+# direct evaluation of correction action (DT_exact - DT_direct) * sigma
+function laplace3d_DT_corrections_hcubature_apply(
+    interface::DielectricInterface{P, T},
+    neighbor_list::Dict{Tuple{Int, Int}, Int},
+    atol::T,
+    sigma::Function,
+) where {P <: AbstractPanel, T}
+    cnt = zeros(Int, length(interface.panels))
+    for i in 1:length(interface.panels)
+        cnt[i] = length(interface.panels[i].points)
+    end
+    offsets = cumsum(vcat(0, cnt))
+    total_n = offsets[end]
+
+    out = zeros(T, total_n)
+
+    for ((i, j), _) in neighbor_list
+        panel_src = interface.panels[i]
+        panel_trg = interface.panels[j]
+
+        # precompute sigma at source quadrature nodes for the direct term
+        sigma_src = Vector{T}(undef, length(panel_src.points))
+        for k in 1:length(panel_src.points)
+            sigma_src[k] = T(sigma(panel_src.points[k]))
+        end
+
+        a, b, c, d = panel_src.corners
+        cc = (a .+ b .+ c .+ d) ./ 4
+        bma = b .- a
+        dma = d .- a
+        Lx = norm(b .- a)
+        Ly = norm(d .- a)
+        scale = Lx * Ly / 4
+
+        weights_src = panel_src.weights
+        points_src = panel_src.points
+        points_trg = panel_trg.points
+        normal_trg = panel_trg.normal
+
+        row_range = (offsets[j] + 1):offsets[j + 1]
+
+        for (t_local, t_global) in enumerate(row_range)
+            point_trg = points_trg[t_local]
+
+            function integrand(x)
+                u = x[1]
+                v = x[2]
+                p = cc .+ bma .* (u / 2) .+ dma .* (v / 2)
+                k = laplace3d_grad(p, point_trg, normal_trg) * scale
+                return T(sigma(p)) * k
+            end
+
+            exact, _ = hcubature(integrand, T[-1, -1], T[1, 1]; atol = atol)
+
+            direct = zero(T)
+            @inbounds for s in 1:length(points_src)
+                direct += sigma_src[s] * weights_src[s] * laplace3d_grad(points_src[s], point_trg, normal_trg)
+            end
+
+            out[t_global] += exact - direct
+        end
+    end
+
+    return out
 end
 
 # linear operator for the corrected DT kernel
