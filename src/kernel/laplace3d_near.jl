@@ -123,7 +123,7 @@ function laplace3d_DT_panel_hcubature(panel_src::FlatPanel{T, 3}, panel_trg::Fla
     points_trg = panel_trg.points
     normal_trg = panel_trg.normal
 
-    for ti in 1:np_trg
+    Base.Threads.@threads for ti in 1:np_trg
         point_trg = points_trg[ti]
         function integrand(x)
             u = x[1]
@@ -443,10 +443,11 @@ function laplace3d_DT_fmm3d_corrected(
     max_order::Int;
     include_edges_src::Bool = false,
     include_edges_trg::Bool = false,
+    range_factor::Float64 = 5.0,
 ) where {P <: AbstractPanel}
     n_points = num_points(interface)
     D_base = laplace3d_DT_fmm3d(interface, fmm_tol)
-    neighbor_list = build_neighbor_list(interface, max_order, up_tol, include_edges_src, include_edges_trg)
+    neighbor_list = build_neighbor_list(interface, max_order, up_tol, include_edges_src, include_edges_trg, range_factor = range_factor)
     @info "length of neighbor_list: $(length(keys(neighbor_list))) out of $(length(interface.panels)^2)"
     corrections = laplace3d_DT_corrections(interface, neighbor_list)
 
