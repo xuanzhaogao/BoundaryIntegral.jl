@@ -2,6 +2,7 @@ module GLMakieExt
 
 using GLMakie
 using BoundaryIntegral
+using BoundaryIntegral: VolumeSource
 using BoundaryIntegral: AbstractPanel, DielectricInterface, build_neighbor_list
 
 import BoundaryIntegral: viz_2d, viz_3d
@@ -189,6 +190,77 @@ function viz_3d(
             fill_alpha = fill_alpha,
         )
     end
+    return fig
+end
+
+function viz_3d!(
+    ax::Axis3,
+    source::VolumeSource{T, 3};
+    colormap = :viridis,
+    colorrange::Union{Nothing, Tuple{T, T}} = nothing,
+    min_density::T = zero(T),
+    markersize::Real = 6,
+    alpha::Real = 0.8,
+) where {T}
+    dens = source.density
+    n = length(dens)
+    n == length(source.points) || throw(ArgumentError("points and density must have the same length"))
+
+    mask = dens .>= min_density
+    any(mask) || return ax
+
+    xs = Vector{T}(undef, count(mask))
+    ys = Vector{T}(undef, count(mask))
+    zs = Vector{T}(undef, count(mask))
+    cs = Vector{T}(undef, count(mask))
+
+    idx = 1
+    for i in 1:n
+        mask[i] || continue
+        p = source.points[i]
+        xs[idx] = p[1]
+        ys[idx] = p[2]
+        zs[idx] = p[3]
+        cs[idx] = dens[i]
+        idx += 1
+    end
+
+    cr = colorrange === nothing ? (minimum(cs), maximum(cs)) : colorrange
+    scatter!(
+        ax,
+        xs,
+        ys,
+        zs;
+        color = cs,
+        colormap = colormap,
+        colorrange = cr,
+        markersize = markersize,
+        transparency = true,
+        alpha = alpha,
+    )
+    return ax
+end
+
+function viz_3d(
+    source::VolumeSource{T, 3};
+    colormap = :viridis,
+    colorrange::Union{Nothing, Tuple{T, T}} = nothing,
+    min_density::T = zero(T),
+    markersize::Real = 6,
+    alpha::Real = 0.8,
+    size = (700, 600),
+) where {T}
+    fig = Figure(size = size)
+    ax = Axis3(fig[1, 1], aspect = :data)
+    viz_3d!(
+        ax,
+        source;
+        colormap = colormap,
+        colorrange = colorrange,
+        min_density = min_density,
+        markersize = markersize,
+        alpha = alpha,
+    )
     return fig
 end
 
