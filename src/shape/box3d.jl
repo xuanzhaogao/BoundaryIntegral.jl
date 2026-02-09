@@ -198,6 +198,17 @@ function rhs_panel3d_resolved(tpl::TempPanel3D{T}, rhs::Function, n_quad::Int, a
     return err <= atol
 end
 
+function rhs_panel3d_quad_order(tpl::TempPanel3D{T}, rhs::Function, n_quad_min::Int, n_quad_max::Int, atol::T) where T
+    @assert n_quad_min >= 1 "n_quad_min must be >= 1"
+    @assert n_quad_max >= n_quad_min "n_quad_max must be >= n_quad_min"
+    for n_quad in n_quad_min:n_quad_max
+        if rhs_panel3d_resolved(tpl, rhs, n_quad, atol)
+            return n_quad
+        end
+    end
+    return n_quad_max
+end
+
 function rect_panel3d_rhs_adaptive_panels(
     a::NTuple{3, T},
     b::NTuple{3, T},
@@ -253,6 +264,73 @@ function rect_panel3d_rhs_adaptive_panels(
 
     panels = Vector{FlatPanel{T, 3}}()
     for tpl in refined
+        is_edge = tpl.is_ab_edge || tpl.is_bc_edge || tpl.is_cd_edge || tpl.is_da_edge ||
+            tpl.is_a_corner || tpl.is_b_corner || tpl.is_c_corner || tpl.is_d_corner
+        push!(panels, rect_panel3d_discretize(tpl.a, tpl.b, tpl.c, tpl.d, ns, ws, tpl.normal; is_edge = is_edge))
+    end
+    return panels
+end
+
+function rect_panel3d_rhs_adaptive_panels_varquad(
+    a::NTuple{3, T},
+    b::NTuple{3, T},
+    c::NTuple{3, T},
+    d::NTuple{3, T},
+    n_quad_max::Int,
+    rhs::Function,
+    normal::NTuple{3, T},
+    is_edge::NTuple{4, Bool},
+    is_corner::NTuple{4, Bool},
+    alpha::T,
+    l_ec::T,
+    rhs_atol::T,
+    max_depth::Int;
+    n_quad_min::Int = 2,
+) where T
+    Lab = norm(b .- a)
+    Lda = norm(a .- d)
+    n_divide_x, n_divide_y = best_grid_mn(Lab, Lda, alpha)
+    rough = divide_temp_panel3d(
+        TempPanel3D(a, b, c, d, is_corner[1], is_corner[2], is_corner[3], is_corner[4], is_edge[1], is_edge[2], is_edge[3], is_edge[4], normal),
+        n_divide_x,
+        n_divide_y,
+    )
+    stack = [(tpl, 0) for tpl in rough]
+    fine = TempPanel3D{T}[]
+
+    while !isempty(stack)
+        tpl, depth = pop!(stack)
+        if depth >= max_depth || rhs_panel3d_resolved(tpl, rhs, n_quad_max, rhs_atol)
+            push!(fine, tpl)
+        else
+            for child in divide_temp_panel3d(tpl, 2, 2)
+                push!(stack, (child, depth + 1))
+            end
+        end
+    end
+
+    rough_ec = copy(fine)
+    refined = TempPanel3D{T}[]
+    while !isempty(rough_ec)
+        tpl = popfirst!(rough_ec)
+        has_ec = tpl.is_a_corner || tpl.is_b_corner || tpl.is_c_corner || tpl.is_d_corner ||
+            tpl.is_ab_edge || tpl.is_bc_edge || tpl.is_cd_edge || tpl.is_da_edge
+        L_ab = norm(tpl.b .- tpl.a)
+        L_da = norm(tpl.a .- tpl.d)
+        if has_ec && max(L_ab, L_da) > l_ec
+            append!(rough_ec, divide_temp_panel3d(tpl, 2, 2))
+        else
+            push!(refined, tpl)
+        end
+    end
+
+    quad_cache = Dict{Int, Tuple{Vector{T}, Vector{T}}}()
+    panels = Vector{FlatPanel{T, 3}}()
+    for tpl in refined
+        n_quad = rhs_panel3d_quad_order(tpl, rhs, n_quad_min, n_quad_max, rhs_atol)
+        ns, ws = get!(quad_cache, n_quad) do
+            gausslegendre(n_quad)
+        end
         is_edge = tpl.is_ab_edge || tpl.is_bc_edge || tpl.is_cd_edge || tpl.is_da_edge ||
             tpl.is_a_corner || tpl.is_b_corner || tpl.is_c_corner || tpl.is_d_corner
         push!(panels, rect_panel3d_discretize(tpl.a, tpl.b, tpl.c, tpl.d, ns, ws, tpl.normal; is_edge = is_edge))
@@ -385,6 +463,79 @@ function single_dielectric_box3d_rhs_adaptive(
     return DielectricInterface(panels, fill(eps_in, length(panels)), fill(eps_out, length(panels)))
 end
 
+function single_dielectric_box3d_rhs_adaptive_varquad(
+    Lx::T,
+    Ly::T,
+    Lz::T,
+    n_quad_max::Int,
+    rhs::Function,
+    l_ec::T,
+    rhs_atol::T,
+    eps_in::T,
+    eps_out::T,
+    ::Type{T} = Float64;
+    max_depth::Int = 8,
+    alpha::T = sqrt(T(2)),
+    n_quad_min::Int = 2,
+) where T
+    t1 = one(T)
+    t0 = zero(T)
+
+    vertices = NTuple{3, T}[
+        ( Lx / 2,  Ly / 2,  Lz / 2),  # 1
+        (-Lx / 2,  Ly / 2,  Lz / 2),  # 2
+        (-Lx / 2, -Ly / 2,  Lz / 2),  # 3
+        ( Lx / 2, -Ly / 2,  Lz / 2),  # 4
+        ( Lx / 2,  Ly / 2, -Lz / 2),  # 5
+        (-Lx / 2,  Ly / 2, -Lz / 2),  # 6
+        (-Lx / 2, -Ly / 2, -Lz / 2),  # 7
+        ( Lx / 2, -Ly / 2, -Lz / 2),  # 8
+    ]
+
+    faces = NTuple{4, Int}[
+        (1, 2, 3, 4),  # z = +Lz/2
+        (5, 8, 7, 6),  # z = -Lz/2
+        (8, 5, 1, 4),  # x = +Lx/2
+        (7, 3, 2, 6),  # x = -Lx/2
+        (6, 2, 1, 5),  # y = +Ly/2
+        (7, 8, 4, 3),  # y = -Ly/2
+    ]
+
+    normals = NTuple{3, T}[
+        ( t0,  t0,  t1),
+        ( t0,  t0, -t1),
+        ( t1,  t0,  t0),
+        (-t1,  t0,  t0),
+        ( t0,  t1,  t0),
+        ( t0, -t1,  t0),
+    ]
+
+    panels = Vector{FlatPanel{T, 3}}()
+    for i in 1:6
+        face = faces[i]
+        a, b, c, d = vertices[face[1]], vertices[face[2]], vertices[face[3]], vertices[face[4]]
+        normal = normals[i]
+        append!(panels, rect_panel3d_rhs_adaptive_panels_varquad(
+            a,
+            b,
+            c,
+            d,
+            n_quad_max,
+            rhs,
+            normal,
+            (true, true, true, true),
+            (true, true, true, true),
+            alpha,
+            l_ec,
+            rhs_atol,
+            max_depth;
+            n_quad_min = n_quad_min,
+        ))
+    end
+
+    return DielectricInterface(panels, fill(eps_in, length(panels)), fill(eps_out, length(panels)))
+end
+
 function single_dielectric_box3d_rhs_adaptive(
     Lx::T,
     Ly::T,
@@ -414,6 +565,40 @@ function single_dielectric_box3d_rhs_adaptive(
         T;
         max_depth = max_depth,
         alpha = alpha,
+    )
+end
+
+function single_dielectric_box3d_rhs_adaptive_varquad(
+    Lx::T,
+    Ly::T,
+    Lz::T,
+    n_quad_max::Int,
+    ps::PointSource{T, 3},
+    eps_src::T,
+    l_ec::T,
+    rhs_atol::T,
+    eps_in::T,
+    eps_out::T,
+    ::Type{T} = Float64;
+    max_depth::Int = 100,
+    alpha::T = sqrt(T(2)),
+    n_quad_min::Int = 2,
+) where T
+    rhs(p, n) = -ps.charge * laplace3d_grad(ps.point, p, n) / eps_src
+    return single_dielectric_box3d_rhs_adaptive_varquad(
+        Lx,
+        Ly,
+        Lz,
+        n_quad_max,
+        rhs,
+        l_ec,
+        rhs_atol,
+        eps_in,
+        eps_out,
+        T;
+        max_depth = max_depth,
+        alpha = alpha,
+        n_quad_min = n_quad_min,
     )
 end
 

@@ -255,6 +255,30 @@ end
     @test isempty(neighbors)
 end
 
+@testset "build_neighbor_list varquad interface" begin
+    rhs(p, n) = 1.0
+    interface = BI.single_dielectric_box3d_rhs_adaptive_varquad(
+        1.0,
+        1.0,
+        1.0,
+        4,
+        rhs,
+        0.3,
+        1e-6,
+        2.0,
+        1.0,
+        Float64;
+        max_depth = 2,
+        n_quad_min = 2,
+    )
+
+    neighbors = BI.build_neighbor_list(interface, 1, 1e-6, true, true; distance_only = true, range_factor = 10.0)
+    @test !isempty(neighbors)
+    for ((i, _), n_up) in neighbors
+        @test n_up == interface.panels[i].n_quad
+    end
+end
+
 @testset "laplace3d_DT_correction_term" begin
     ns, ws = gausslegendre(2)
     ns = Float64.(ns)

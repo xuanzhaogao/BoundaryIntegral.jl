@@ -139,7 +139,9 @@ end
 
 function interface_approx(interface::DielectricInterface{FlatPanel{T, 3}, T}, values::AbstractVector{T}; tol::T = sqrt(eps(T))) where T
     @assert length(values) == num_points(interface)
-    interps = Vector{PanelRhsInterp{T}}(undef, length(interface.panels))
+    n_panels = length(interface.panels)
+    interps = Vector{PanelRhsInterp{T}}(undef, n_panels)
+    centers = Matrix{T}(undef, 3, n_panels)
     offset = 0
     for (i, panel) in enumerate(interface.panels)
         ns = panel.gl_xs
@@ -170,9 +172,31 @@ function interface_approx(interface::DielectricInterface{FlatPanel{T, 3}, T}, va
         offset += n_quad * n_quad
 
         interps[i] = PanelRhsInterp(cc, bma, dma, inv11, inv12, inv22, scale, ns, λ, vals)
+        centers[1, i] = cc[1]
+        centers[2, i] = cc[2]
+        centers[3, i] = cc[3]
     end
 
+    tree = KDTree(centers)
+    k = min(n_panels, 16)
+
     function approx(p::NTuple{3, T})
+        idxs, _ = knn(tree, collect(p), k, true)
+        for idx in idxs
+            interp = interps[idx]
+            u, v, hit = _panel_uv(interp, p, tol)
+            if hit
+                rx = T.(barycentric_row(interp.ns, interp.λ, u))
+                ry = T.(barycentric_row(interp.ns, interp.λ, v))
+                val = zero(T)
+                for ii in eachindex(interp.ns)
+                    for jj in eachindex(interp.ns)
+                        val += interp.vals[ii, jj] * rx[ii] * ry[jj]
+                    end
+                end
+                return val
+            end
+        end
         for interp in interps
             u, v, hit = _panel_uv(interp, p, tol)
             if hit
