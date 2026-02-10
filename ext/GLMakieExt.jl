@@ -196,58 +196,41 @@ end
 function viz_3d!(
     ax::Axis3,
     source::VolumeSource{T, 3};
-    colormap = :viridis,
     colorrange::Union{Nothing, Tuple{T, T}} = nothing,
     min_density::T = zero(T),
     markersize::Real = 6,
     alpha::Real = 0.8,
+    algorithm = :mip,
 ) where {T}
+    xs, ys, zs = source.axes
     dens = source.density
-    n = length(dens)
-    n == length(source.points) || throw(ArgumentError("points and density must have the same length"))
-
-    mask = dens .>= min_density
-    any(mask) || return ax
-
-    xs = Vector{T}(undef, count(mask))
-    ys = Vector{T}(undef, count(mask))
-    zs = Vector{T}(undef, count(mask))
-    cs = Vector{T}(undef, count(mask))
-
-    idx = 1
-    for i in 1:n
-        mask[i] || continue
-        p = source.points[i]
-        xs[idx] = p[1]
-        ys[idx] = p[2]
-        zs[idx] = p[3]
-        cs[idx] = dens[i]
-        idx += 1
+    if !(BoundaryIntegral._is_uniform_axis(xs) && BoundaryIntegral._is_uniform_axis(ys) && BoundaryIntegral._is_uniform_axis(zs))
+        (xs, ys, zs), dens = BoundaryIntegral._resample_volume_to_uniform((xs, ys, zs), dens)
     end
 
-    cr = colorrange === nothing ? (minimum(cs), maximum(cs)) : colorrange
-    scatter!(
+    colormap = to_colormap(:plasma)
+    colormap[1] = RGBAf(0,0,0,0)
+
+    volume!(
         ax,
-        xs,
-        ys,
-        zs;
-        color = cs,
+        (first(xs), last(xs)),
+        (first(ys), last(ys)),
+        (first(zs), last(zs)),
+        dens;
         colormap = colormap,
-        colorrange = cr,
-        markersize = markersize,
-        transparency = true,
-        alpha = alpha,
+        algorithm = algorithm,
+        absorption=4f0
     )
     return ax
 end
 
 function viz_3d(
     source::VolumeSource{T, 3};
-    colormap = :viridis,
     colorrange::Union{Nothing, Tuple{T, T}} = nothing,
     min_density::T = zero(T),
     markersize::Real = 6,
     alpha::Real = 0.8,
+    algorithm = :mip,
     size = (700, 600),
 ) where {T}
     fig = Figure(size = size)
@@ -255,11 +238,11 @@ function viz_3d(
     viz_3d!(
         ax,
         source;
-        colormap = colormap,
         colorrange = colorrange,
         min_density = min_density,
         markersize = markersize,
         alpha = alpha,
+        algorithm = algorithm,
     )
     return fig
 end

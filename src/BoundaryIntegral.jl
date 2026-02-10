@@ -14,7 +14,7 @@ export DielectricInterface
 export rhs_approx
 export interface_approx
 
-export PointSource
+export PointSource, VolumeSource
 
 # kernel functions
 export laplace2d_pot, laplace2d_grad

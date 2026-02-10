@@ -11,6 +11,9 @@ using Test
     include("utils/quad_order.jl")
     include("utils/best_grid.jl")
 
+    # core
+    include("core/sources.jl")
+
     # kernel functions
     include("kernel/laplace2d.jl")
     include("kernel/laplace3d.jl")
