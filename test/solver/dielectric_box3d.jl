@@ -115,3 +115,32 @@ end
     @test norm(lhs * x - rhs) < 1e-5
     @test abs(dot(BI.all_weights(interface), x)) < 1e-2
 end
+
+@testset "dielectric_box3d rhs volume source" begin
+    eps_box = 4.0
+    eps_src = 2.0
+    interface = BI.single_dielectric_box3d(1.0, 1.0, 1.0, 2, 0.2, eps_box, 1.0, Float64; alpha = sqrt(2))
+
+    xs = [2.0, 2.5]
+    ys = [2.0, 2.5]
+    zs = [2.0, 2.5]
+    weights = fill(1.0, 2, 2, 2)
+    density = fill(1.0, 2, 2, 2)
+    vs = BI.VolumeSource{Float64, 3}((xs, ys, zs), weights, density)
+
+    rhs_direct = BI.Rhs_dielectric_box3d(interface, vs, eps_src)
+    rhs_manual = zeros(Float64, BI.num_points(interface))
+    for (i, point) in enumerate(BI.eachpoint(interface))
+        acc = 0.0
+        for ix in eachindex(xs), iy in eachindex(ys), iz in eachindex(zs)
+            pos = (xs[ix], ys[iy], zs[iz])
+            acc += weights[ix, iy, iz] * density[ix, iy, iz] *
+                BI.laplace3d_grad(pos, point.panel_point.point, point.panel_point.normal)
+        end
+        rhs_manual[i] = -acc / eps_src
+    end
+    @test norm(rhs_direct - rhs_manual) <= 1e-12
+
+    rhs_fmm = BI.Rhs_dielectric_box3d_fmm3d(interface, vs, eps_src, 1e-8)
+    @test norm(rhs_fmm - rhs_direct) / norm(rhs_direct) < 1e-6
+end

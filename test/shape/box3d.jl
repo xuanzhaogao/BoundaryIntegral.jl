@@ -172,3 +172,63 @@ end
         @test max_err <= rhs_atol
     end
 end
+
+@testset "box3d rhs adaptive volume source" begin
+    rng = MersenneTwister(2024)
+    xs = [4.5, 5.0]
+    ys = [4.5, 5.0]
+    zs = [4.5, 5.0]
+    weights = fill(1.0, 2, 2, 2)
+    density = fill(1.0, 2, 2, 2)
+    vs = BI.VolumeSource{Float64, 3}((xs, ys, zs), weights, density)
+    eps_src = 2.0
+
+    function rhs_volume(p, n)
+        acc = 0.0
+        for i in 1:length(xs), j in 1:length(ys), k in 1:length(zs)
+            pos = (xs[i], ys[j], zs[k])
+            acc += weights[i, j, k] * density[i, j, k] * BI.laplace3d_grad(pos, p, n) / eps_src
+        end
+        return -acc
+    end
+
+    rhs_atol = 1e-4
+    interface = BI.single_dielectric_box3d_rhs_adaptive(
+        1.0,
+        1.0,
+        1.0,
+        4,
+        vs,
+        eps_src,
+        0.3,
+        rhs_atol,
+        2.0,
+        1.0,
+        Float64;
+        max_depth = 4,
+    )
+
+    n_panels_sample = min(8, length(interface.panels))
+    panel_indices = rand(rng, 1:length(interface.panels), n_panels_sample)
+    rhs_vals = [rhs_volume(point.panel_point.point, point.panel_point.normal) for point in BI.eachpoint(interface)]
+    rhs_panel_vals = BI.interface_approx(interface, rhs_vals; tol = 1e-8)
+    n_points = 12
+    for idx in panel_indices
+        panel = interface.panels[idx]
+        a, b, c, d = panel.corners
+        cc = (a .+ b .+ c .+ d) ./ 4
+        bma = b .- a
+        dma = d .- a
+
+        max_err = 0.0
+        for _ in 1:n_points
+            u = rand(rng) * 2 - 1
+            v = rand(rng) * 2 - 1
+            p = cc .+ bma .* (u / 2) .+ dma .* (v / 2)
+            exact = rhs_volume(p, panel.normal)
+            approx_vals = rhs_panel_vals(p)
+            max_err = max(max_err, abs(exact - approx_vals))
+        end
+        @test max_err <= rhs_atol
+    end
+end

@@ -568,6 +568,50 @@ function single_dielectric_box3d_rhs_adaptive(
     )
 end
 
+function single_dielectric_box3d_rhs_adaptive(
+    Lx::T,
+    Ly::T,
+    Lz::T,
+    n_quad::Int,
+    vs::VolumeSource{T, 3},
+    eps_src::T,
+    l_ec::T,
+    rhs_atol::T,
+    eps_in::T,
+    eps_out::T,
+    ::Type{T} = Float64;
+    max_depth::Int = 100,
+    alpha::T = sqrt(T(2)),
+) where T
+    xs, ys, zs = vs.axes
+    weights = vs.weights
+    density = vs.density
+
+    function rhs(p, n)
+        acc = zero(T)
+        for i in eachindex(xs), j in eachindex(ys), k in eachindex(zs)
+            pos = (xs[i], ys[j], zs[k])
+            acc += weights[i, j, k] * density[i, j, k] * laplace3d_grad(pos, p, n)
+        end
+        return -acc / eps_src
+    end
+
+    return single_dielectric_box3d_rhs_adaptive(
+        Lx,
+        Ly,
+        Lz,
+        n_quad,
+        rhs,
+        l_ec,
+        rhs_atol,
+        eps_in,
+        eps_out,
+        T;
+        max_depth = max_depth,
+        alpha = alpha,
+    )
+end
+
 function single_dielectric_box3d_rhs_adaptive_varquad(
     Lx::T,
     Ly::T,

@@ -35,62 +35,6 @@ function _is_uniform_axis(axis::AbstractVector{T}; rtol::T = sqrt(eps(T)), atol:
     return true
 end
 
-function _resample_volume_to_uniform(axes::NTuple{3, Vector{T}}, density::AbstractArray{T, 3}) where {T}
-    xs, ys, zs = axes
-    nx, ny, nz = length(xs), length(ys), length(zs)
-
-    xsu = collect(LinRange(first(xs), last(xs), nx))
-    ysu = collect(LinRange(first(ys), last(ys), ny))
-    zsu = collect(LinRange(first(zs), last(zs), nz))
-
-    FT = float(T)
-    out = Array{FT, 3}(undef, nx, ny, nz)
-
-    for i in 1:nx
-        x = xsu[i]
-        ix = searchsortedlast(xs, x)
-        ix = clamp(ix, 1, nx - 1)
-        x0 = xs[ix]
-        x1 = xs[ix + 1]
-        tx = x1 == x0 ? zero(FT) : FT((x - x0) / (x1 - x0))
-        for j in 1:ny
-            y = ysu[j]
-            iy = searchsortedlast(ys, y)
-            iy = clamp(iy, 1, ny - 1)
-            y0 = ys[iy]
-            y1 = ys[iy + 1]
-            ty = y1 == y0 ? zero(FT) : FT((y - y0) / (y1 - y0))
-            for k in 1:nz
-                z = zsu[k]
-                iz = searchsortedlast(zs, z)
-                iz = clamp(iz, 1, nz - 1)
-                z0 = zs[iz]
-                z1 = zs[iz + 1]
-                tz = z1 == z0 ? zero(FT) : FT((z - z0) / (z1 - z0))
-
-                v000 = FT(density[ix, iy, iz])
-                v100 = FT(density[ix + 1, iy, iz])
-                v010 = FT(density[ix, iy + 1, iz])
-                v110 = FT(density[ix + 1, iy + 1, iz])
-                v001 = FT(density[ix, iy, iz + 1])
-                v101 = FT(density[ix + 1, iy, iz + 1])
-                v011 = FT(density[ix, iy + 1, iz + 1])
-                v111 = FT(density[ix + 1, iy + 1, iz + 1])
-
-                c00 = v000 * (1 - tx) + v100 * tx
-                c10 = v010 * (1 - tx) + v110 * tx
-                c01 = v001 * (1 - tx) + v101 * tx
-                c11 = v011 * (1 - tx) + v111 * tx
-                c0 = c00 * (1 - ty) + c10 * ty
-                c1 = c01 * (1 - ty) + c11 * ty
-                out[i, j, k] = c0 * (1 - tz) + c1 * tz
-            end
-        end
-    end
-
-    return (xsu, ysu, zsu), out
-end
-
 function VolumeSource(points::Vector{NTuple{3, T}}, weights::Vector{T}, density::Vector{T}) where {T}
     n = length(points)
     n == length(weights) || throw(ArgumentError("points and weights must have the same length"))
@@ -154,4 +98,55 @@ function GaussianVolumeSource(center::NTuple{3, T}, σ::T, n::Int, tol::T) where
     end
 
     return VolumeSource{T, 3}((xs, ys, zs), weights, density)
+end
+
+function _gaussian_quad_order(σ::T, tol::T; n_max::Int = 64) where T
+    @assert σ > zero(T) "σ must be > 0"
+    @assert tol > zero(T) && tol < one(T) "tol must be in (0, 1)"
+    @assert n_max >= 1 "n_max must be >= 1"
+
+    two_sigma2 = T(2) * σ * σ
+    support_r = sqrt(two_sigma2 * log(inv(tol)))
+    norm_factor = inv((sqrt(T(2) * T(pi)) * σ)^3)
+
+    n_sample = 10
+    for n in 2:n_max
+        ns, ws = gausslegendre(n)
+        nsT = T.(ns)
+        wsT = T.(ws)
+        λ = gl_barycentric_weights(nsT, wsT)
+        gx = [exp(-((support_r * nsT[i])^2) / two_sigma2) for i in 1:n]
+        gy = gx
+        gz = gx
+        us = collect(LinRange(T(-1), T(1), n_sample))
+
+        max_err = zero(T)
+        for i in eachindex(us), j in eachindex(us), k in eachindex(us)
+            rx = barycentric_row(nsT, λ, us[i])
+            ry = barycentric_row(nsT, λ, us[j])
+            rz = barycentric_row(nsT, λ, us[k])
+            gx_i = sum(rx .* gx)
+            gy_j = sum(ry .* gy)
+            gz_k = sum(rz .* gz)
+            approx = norm_factor * gx_i * gy_j * gz_k
+            x = support_r * us[i]
+            y = support_r * us[j]
+            z = support_r * us[k]
+            r2 = x^2 + y^2 + z^2
+            exact = norm_factor * exp(-r2 / two_sigma2)
+            err = abs(approx - exact)
+            max_err = max(max_err, err)
+        end
+
+        if max_err <= tol
+            return n
+        end
+    end
+
+    throw(ArgumentError("could not resolve Gaussian with tol=$(tol) using n <= $(n_max)"))
+end
+
+function GaussianVolumeSource(center::NTuple{3, T}, σ::T, tol::T) where T
+    n = _gaussian_quad_order(σ, tol)
+    return GaussianVolumeSource(center, σ, n, tol)
 end

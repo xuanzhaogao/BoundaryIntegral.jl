@@ -37,7 +37,7 @@ export single_dielectric_box3d_rhs_adaptive_varquad
 
 # solvers
 export Lhs_dielectric_box2d, Lhs_dielectric_box2d_fmm2d, Rhs_dielectric_box2d
-export Lhs_dielectric_box3d, Lhs_dielectric_box3d_fmm3d, Rhs_dielectric_box3d
+export Lhs_dielectric_box3d, Lhs_dielectric_box3d_fmm3d, Rhs_dielectric_box3d, Rhs_dielectric_box3d_fmm3d
 
 # linear algebra
 export solve_lu, solve_gmres
