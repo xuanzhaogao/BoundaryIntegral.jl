@@ -198,6 +198,25 @@ function rhs_panel3d_resolved(tpl::TempPanel3D{T}, rhs::Function, n_quad::Int, a
     return err <= atol
 end
 
+function _volume_source_fmm_sources(vs::VolumeSource{T, 3}) where T
+    xs_src, ys_src, zs_src = vs.axes
+    weights = vs.weights
+    density = vs.density
+    nx, ny, nz = length(xs_src), length(ys_src), length(zs_src)
+    n_sources = nx * ny * nz
+    sources = Matrix{T}(undef, 3, n_sources)
+    charges = Vector{T}(undef, n_sources)
+    s = 0
+    for ix in 1:nx, iy in 1:ny, iz in 1:nz
+        s += 1
+        sources[1, s] = xs_src[ix]
+        sources[2, s] = ys_src[iy]
+        sources[3, s] = zs_src[iz]
+        charges[s] = weights[ix, iy, iz] * density[ix, iy, iz]
+    end
+    return sources, charges
+end
+
 function _rhs_panel3d_resolved_volume_fmm(
     panels::Vector{TempPanel3D{T}},
     vs::VolumeSource{T, 3},
@@ -257,21 +276,7 @@ function _rhs_panel3d_resolved_volume_fmm(
         end
     end
 
-    xs_src, ys_src, zs_src = vs.axes
-    weights = vs.weights
-    density = vs.density
-    nx, ny, nz = length(xs_src), length(ys_src), length(zs_src)
-    n_sources = nx * ny * nz
-    sources = Matrix{T}(undef, 3, n_sources)
-    charges = Vector{T}(undef, n_sources)
-    s = 0
-    for ix in 1:nx, iy in 1:ny, iz in 1:nz
-        s += 1
-        sources[1, s] = xs_src[ix]
-        sources[2, s] = ys_src[iy]
-        sources[3, s] = zs_src[iz]
-        charges[s] = weights[ix, iy, iz] * density[ix, iy, iz]
-    end
+    sources, charges = _volume_source_fmm_sources(vs)
 
     vals = lfmm3d(fmm_tol, sources, charges = charges, targets = targets, pgt = 2)
     grad = vals.gradtarg
