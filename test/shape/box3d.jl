@@ -117,6 +117,41 @@ using Test
     end
 end
 
+@testset "volume source rhs adaptive uses batched eval" begin
+    xs = [-0.25, 0.0, 0.25]
+    ys = [-0.25, 0.0, 0.25]
+    zs = [-0.25, 0.0, 0.25]
+    weights = fill(1.0, 3, 3, 3)
+    density = fill(1.0, 3, 3, 3)
+    vs = BI.VolumeSource{Float64, 3}((xs, ys, zs), weights, density)
+    eps_src = 1.0
+
+    function rhs_volume(p, n)
+        acc = 0.0
+        for i in 1:length(xs), j in 1:length(ys), k in 1:length(zs)
+            pos = (xs[i], ys[j], zs[k])
+            acc += weights[i, j, k] * density[i, j, k] * BI.laplace3d_grad(pos, p, n)
+        end
+        return -acc / eps_src
+    end
+
+    a = (0.5, 0.5, 0.0)
+    b = (-0.5, 0.5, 0.0)
+    c = (-0.5, -0.5, 0.0)
+    d = (0.5, -0.5, 0.0)
+    normal = (0.0, 0.0, 1.0)
+    tpl = BI.TempPanel3D(a, b, c, d, false, false, false, false, false, false, false, false, normal)
+
+    n_quad = 3
+    rhs_atol = 1e-6
+    ns, ws = BI.gausslegendre(n_quad)
+
+    resolved_direct = BI.rhs_panel3d_resolved(tpl, rhs_volume, n_quad, rhs_atol)
+    resolved_fmm = BI._rhs_panel3d_resolved_volume_fmm([tpl], vs, eps_src, ns, ws, rhs_atol, rhs_atol * 0.1)[1]
+
+    @test resolved_fmm || !resolved_direct
+end
+
 @testset "box3d rhs adaptive varquad accuracy" begin
     rng = MersenneTwister(4321)
     ps = BI.PointSource((0.12, -0.08, 0.05), 1.0)

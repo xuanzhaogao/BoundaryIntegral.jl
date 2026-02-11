@@ -198,6 +198,123 @@ function rhs_panel3d_resolved(tpl::TempPanel3D{T}, rhs::Function, n_quad::Int, a
     return err <= atol
 end
 
+function _rhs_panel3d_resolved_volume_fmm(
+    panels::Vector{TempPanel3D{T}},
+    vs::VolumeSource{T, 3},
+    eps_src::T,
+    ns::Vector{T},
+    ws::Vector{T},
+    atol::T,
+    fmm_tol::T,
+) where T
+    n_panels = length(panels)
+    resolved = fill(false, n_panels)
+    n_quad = length(ns)
+    λ = gl_barycentric_weights(ns, ws)
+    n_pts = 10
+    xs = range(-one(T), one(T); length = n_pts)
+    ys = range(-one(T), one(T); length = n_pts)
+    n_test = n_pts * n_pts
+    n_targets = n_panels * (n_quad * n_quad + n_test)
+
+    targets = Matrix{T}(undef, 3, n_targets)
+    normals = Matrix{T}(undef, 3, n_targets)
+
+    t = 0
+    for tpl in panels
+        a, b, c, d = tpl.a, tpl.b, tpl.c, tpl.d
+        cc = (a .+ b .+ c .+ d) ./ 4
+        bma = b .- a
+        dma = d .- a
+        normal = tpl.normal
+
+        for i in 1:n_quad
+            u = ns[i]
+            for j in 1:n_quad
+                v = ns[j]
+                t += 1
+                p = cc .+ bma .* (u / 2) .+ dma .* (v / 2)
+                targets[1, t] = p[1]
+                targets[2, t] = p[2]
+                targets[3, t] = p[3]
+                normals[1, t] = normal[1]
+                normals[2, t] = normal[2]
+                normals[3, t] = normal[3]
+            end
+        end
+
+        for u in xs
+            for v in ys
+                t += 1
+                p = cc .+ bma .* (u / 2) .+ dma .* (v / 2)
+                targets[1, t] = p[1]
+                targets[2, t] = p[2]
+                targets[3, t] = p[3]
+                normals[1, t] = normal[1]
+                normals[2, t] = normal[2]
+                normals[3, t] = normal[3]
+            end
+        end
+    end
+
+    xs_src, ys_src, zs_src = vs.axes
+    weights = vs.weights
+    density = vs.density
+    nx, ny, nz = length(xs_src), length(ys_src), length(zs_src)
+    n_sources = nx * ny * nz
+    sources = Matrix{T}(undef, 3, n_sources)
+    charges = Vector{T}(undef, n_sources)
+    s = 0
+    for ix in 1:nx, iy in 1:ny, iz in 1:nz
+        s += 1
+        sources[1, s] = xs_src[ix]
+        sources[2, s] = ys_src[iy]
+        sources[3, s] = zs_src[iz]
+        charges[s] = weights[ix, iy, iz] * density[ix, iy, iz]
+    end
+
+    vals = lfmm3d(fmm_tol, sources, charges = charges, targets = targets, pgt = 2)
+    grad = vals.gradtarg
+
+    rhs_vals = Vector{T}(undef, n_targets)
+    for i in 1:n_targets
+        rhs_vals[i] = -dot(normals[:, i], grad[:, i]) / (4π * eps_src)
+    end
+
+    idx = 0
+    for p in 1:n_panels
+        quad_vals = Matrix{T}(undef, n_quad, n_quad)
+        for i in 1:n_quad
+            for j in 1:n_quad
+                idx += 1
+                quad_vals[i, j] = rhs_vals[idx]
+            end
+        end
+
+        err = zero(T)
+        max_ref = zero(T)
+        for u in xs
+            rx = T.(barycentric_row(ns, λ, u))
+            for v in ys
+                ry = T.(barycentric_row(ns, λ, v))
+                approx = zero(T)
+                for i in 1:n_quad
+                    for j in 1:n_quad
+                        approx += quad_vals[i, j] * rx[i] * ry[j]
+                    end
+                end
+                idx += 1
+                exact = rhs_vals[idx]
+                err = max(err, abs(exact - approx))
+                max_ref = max(max_ref, abs(exact))
+            end
+        end
+        resolved[p] = err <= atol
+    end
+
+    return resolved
+end
+
 function rhs_panel3d_quad_order(tpl::TempPanel3D{T}, rhs::Function, n_quad_min::Int, n_quad_max::Int, atol::T) where T
     @assert n_quad_min >= 1 "n_quad_min must be >= 1"
     @assert n_quad_max >= n_quad_min "n_quad_max must be >= n_quad_min"
@@ -243,6 +360,88 @@ function rect_panel3d_rhs_adaptive_panels(
         else
             for child in divide_temp_panel3d(tpl, 2, 2)
                 push!(stack, (child, depth + 1))
+            end
+        end
+    end
+
+    rough_ec = copy(fine)
+    refined = TempPanel3D{T}[]
+    while !isempty(rough_ec)
+        tpl = popfirst!(rough_ec)
+        has_ec = tpl.is_a_corner || tpl.is_b_corner || tpl.is_c_corner || tpl.is_d_corner ||
+            tpl.is_ab_edge || tpl.is_bc_edge || tpl.is_cd_edge || tpl.is_da_edge
+        L_ab = norm(tpl.b .- tpl.a)
+        L_da = norm(tpl.a .- tpl.d)
+        if has_ec && max(L_ab, L_da) > l_ec
+            append!(rough_ec, divide_temp_panel3d(tpl, 2, 2))
+        else
+            push!(refined, tpl)
+        end
+    end
+
+    panels = Vector{FlatPanel{T, 3}}()
+    for tpl in refined
+        is_edge = tpl.is_ab_edge || tpl.is_bc_edge || tpl.is_cd_edge || tpl.is_da_edge ||
+            tpl.is_a_corner || tpl.is_b_corner || tpl.is_c_corner || tpl.is_d_corner
+        push!(panels, rect_panel3d_discretize(tpl.a, tpl.b, tpl.c, tpl.d, ns, ws, tpl.normal; is_edge = is_edge))
+    end
+    return panels
+end
+
+function rect_panel3d_rhs_adaptive_panels(
+    a::NTuple{3, T},
+    b::NTuple{3, T},
+    c::NTuple{3, T},
+    d::NTuple{3, T},
+    n_quad::Int,
+    vs::VolumeSource{T, 3},
+    eps_src::T,
+    normal::NTuple{3, T},
+    is_edge::NTuple{4, Bool},
+    is_corner::NTuple{4, Bool},
+    alpha::T,
+    l_ec::T,
+    rhs_atol::T,
+    max_depth::Int;
+) where T
+    ns, ws = gausslegendre(n_quad)
+    Lab = norm(b .- a)
+    Lda = norm(a .- d)
+    n_divide_x, n_divide_y = best_grid_mn(Lab, Lda, alpha)
+    rough = divide_temp_panel3d(
+        TempPanel3D(a, b, c, d, is_corner[1], is_corner[2], is_corner[3], is_corner[4], is_edge[1], is_edge[2], is_edge[3], is_edge[4], normal),
+        n_divide_x,
+        n_divide_y,
+    )
+
+    max_depth = max(max_depth, 0)
+    fmm_tol = rhs_atol * T(0.1)
+
+    panels_by_depth = [TempPanel3D{T}[] for _ in 0:max_depth]
+    for tpl in rough
+        push!(panels_by_depth[1], tpl)
+    end
+
+    fine = TempPanel3D{T}[]
+
+    for depth in 0:max_depth
+        current = panels_by_depth[depth + 1]
+        isempty(current) && continue
+
+        if depth >= max_depth
+            append!(fine, current)
+            continue
+        end
+
+        resolved = _rhs_panel3d_resolved_volume_fmm(current, vs, eps_src, ns, ws, rhs_atol, fmm_tol)
+        for i in eachindex(current)
+            tpl = current[i]
+            if resolved[i]
+                push!(fine, tpl)
+            else
+                for child in divide_temp_panel3d(tpl, 2, 2)
+                    push!(panels_by_depth[depth + 2], child)
+                end
             end
         end
     end
@@ -583,33 +782,62 @@ function single_dielectric_box3d_rhs_adaptive(
     max_depth::Int = 100,
     alpha::T = sqrt(T(2)),
 ) where T
-    xs, ys, zs = vs.axes
-    weights = vs.weights
-    density = vs.density
+    t1 = one(T)
+    t0 = zero(T)
 
-    function rhs(p, n)
-        acc = zero(T)
-        for i in eachindex(xs), j in eachindex(ys), k in eachindex(zs)
-            pos = (xs[i], ys[j], zs[k])
-            acc += weights[i, j, k] * density[i, j, k] * laplace3d_grad(pos, p, n)
-        end
-        return -acc / eps_src
+    vertices = NTuple{3, T}[
+        ( Lx / 2,  Ly / 2,  Lz / 2),  # 1
+        (-Lx / 2,  Ly / 2,  Lz / 2),  # 2
+        (-Lx / 2, -Ly / 2,  Lz / 2),  # 3
+        ( Lx / 2, -Ly / 2,  Lz / 2),  # 4
+        ( Lx / 2,  Ly / 2, -Lz / 2),  # 5
+        (-Lx / 2,  Ly / 2, -Lz / 2),  # 6
+        (-Lx / 2, -Ly / 2, -Lz / 2),  # 7
+        ( Lx / 2, -Ly / 2, -Lz / 2),  # 8
+    ]
+
+    faces = NTuple{4, Int}[
+        (1, 2, 3, 4),  # z = +Lz/2
+        (5, 8, 7, 6),  # z = -Lz/2
+        (8, 5, 1, 4),  # x = +Lx/2
+        (7, 3, 2, 6),  # x = -Lx/2
+        (6, 2, 1, 5),  # y = +Ly/2
+        (7, 8, 4, 3),  # y = -Ly/2
+    ]
+
+    normals = NTuple{3, T}[
+        ( t0,  t0,  t1),
+        ( t0,  t0, -t1),
+        ( t1,  t0,  t0),
+        (-t1,  t0,  t0),
+        ( t0,  t1,  t0),
+        ( t0, -t1,  t0),
+    ]
+
+    panels = Vector{FlatPanel{T, 3}}()
+    for i in 1:6
+        face = faces[i]
+        a, b, c, d = vertices[face[1]], vertices[face[2]], vertices[face[3]], vertices[face[4]]
+        normal = normals[i]
+        append!(panels, rect_panel3d_rhs_adaptive_panels(
+            a,
+            b,
+            c,
+            d,
+            n_quad,
+            vs,
+            eps_src,
+            normal,
+            (true, true, true, true),
+            (true, true, true, true),
+            alpha,
+            l_ec,
+            rhs_atol,
+            max_depth;
+        ))
     end
 
-    return single_dielectric_box3d_rhs_adaptive(
-        Lx,
-        Ly,
-        Lz,
-        n_quad,
-        rhs,
-        l_ec,
-        rhs_atol,
-        eps_in,
-        eps_out,
-        T;
-        max_depth = max_depth,
-        alpha = alpha,
-    )
+    return DielectricInterface(panels, fill(eps_in, length(panels)), fill(eps_out, length(panels)))
 end
 
 function single_dielectric_box3d_rhs_adaptive_varquad(
