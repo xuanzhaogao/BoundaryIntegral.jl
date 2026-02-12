@@ -152,6 +152,13 @@ end
     @test resolved_fmm || !resolved_direct
 end
 
+@testset "volume source rhs adaptive batches all faces" begin
+    alpha = sqrt(2.0)
+    n_divide_x, n_divide_y = BI.best_grid_mn(1.0, 1.0, alpha)
+    panels = BI._box3d_rhs_adaptive_initial_panels(1.0, 1.0, 1.0, alpha)
+    @test length(panels) == 6 * n_divide_x * n_divide_y
+end
+
 @testset "box3d rhs adaptive varquad accuracy" begin
     rng = MersenneTwister(4321)
     ps = BI.PointSource((0.12, -0.08, 0.05), 1.0)
