@@ -117,6 +117,14 @@ using Test
     end
 end
 
+@testset "box3d geometry helper" begin
+    quads, normals = BI._box3d_face_quads(1.0, 2.0, 3.0)
+    @test length(quads) == 6
+    @test length(normals) == 6
+    @test normals[1] == (0.0, 0.0, 1.0)
+    @test normals[2] == (0.0, 0.0, -1.0)
+end
+
 @testset "volume source rhs adaptive uses batched eval" begin
     xs = [-0.25, 0.0, 0.25]
     ys = [-0.25, 0.0, 0.25]
