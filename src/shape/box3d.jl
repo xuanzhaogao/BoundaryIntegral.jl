@@ -217,7 +217,7 @@ function _volume_source_fmm_sources(vs::VolumeSource{T, 3}) where T
     return sources, charges
 end
 
-function _box3d_rhs_adaptive_initial_panels(Lx::T, Ly::T, Lz::T, alpha::T) where T
+function _box3d_geometry(Lx::T, Ly::T, Lz::T) where T
     t1 = one(T)
     t0 = zero(T)
 
@@ -249,6 +249,12 @@ function _box3d_rhs_adaptive_initial_panels(Lx::T, Ly::T, Lz::T, alpha::T) where
         ( t0,  t1,  t0),
         ( t0, -t1,  t0),
     ]
+
+    return vertices, faces, normals
+end
+
+function _box3d_rhs_adaptive_initial_panels(Lx::T, Ly::T, Lz::T, alpha::T) where T
+    vertices, faces, normals = _box3d_geometry(Lx, Ly, Lz)
 
     panels = TempPanel3D{T}[]
     is_edge = (true, true, true, true)
