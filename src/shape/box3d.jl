@@ -353,6 +353,8 @@ function _rhs_panel3d_resolved_volume_fmm(
 
     sources, charges = _volume_source_fmm_sources(vs)
 
+    @info "    rhs panel fmm evaluation, source points: $(length(charges)), target points: $n_targets"
+
     vals = lfmm3d(fmm_tol, sources, charges = charges, targets = targets, pgt = 2)
     grad = vals.gradtarg
 
@@ -772,10 +774,14 @@ function single_dielectric_box3d_rhs_adaptive(
     ns, ws = gausslegendre(n_quad)
     fmm_tol = rhs_atol * T(0.1)
 
+    @info "box3d volume source rhs adaptive panel generation, source points: $(length(vs.density))"
+
+    # rhs refinement
     solved = TempPanel3D{T}[]
     unsolved = _box3d_rhs_adaptive_initial_panels(Lx, Ly, Lz, alpha)
     depth = 0
     while !isempty(unsolved) && depth < max_depth
+        @info "  depth $depth, unsolved panels: $(length(unsolved))"
         resolved = _rhs_panel3d_resolved_volume_fmm(unsolved, vs, eps_src, ns, ws, rhs_atol, fmm_tol)
         next_unsolved = TempPanel3D{T}[]
         for i in eachindex(unsolved)
@@ -792,6 +798,7 @@ function single_dielectric_box3d_rhs_adaptive(
 
     append!(solved, unsolved)
 
+    # edge and corner refinement
     rough_ec = copy(solved)
     refined = TempPanel3D{T}[]
     while !isempty(rough_ec)
@@ -807,6 +814,7 @@ function single_dielectric_box3d_rhs_adaptive(
         end
     end
 
+    # add tensor product gl points to panels
     panels = Vector{FlatPanel{T, 3}}()
     for tpl in refined
         is_edge = tpl.is_ab_edge || tpl.is_bc_edge || tpl.is_cd_edge || tpl.is_da_edge ||

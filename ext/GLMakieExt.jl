@@ -5,7 +5,7 @@ using BoundaryIntegral
 using BoundaryIntegral: VolumeSource
 using BoundaryIntegral: AbstractPanel, DielectricInterface, build_neighbor_list
 
-import BoundaryIntegral: viz_2d, viz_3d, _resample_volume_to_uniform
+import BoundaryIntegral: viz_2d, viz_3d
 
 function _resample_volume_to_uniform(axes::NTuple{3, Vector{T}}, density::AbstractArray{T, 3}) where {T}
     xs, ys, zs = axes
@@ -350,7 +350,7 @@ function viz_3d!(
     xs, ys, zs = source.axes
     dens = source.density
     if !(BoundaryIntegral._is_uniform_axis(xs) && BoundaryIntegral._is_uniform_axis(ys) && BoundaryIntegral._is_uniform_axis(zs))
-        (xs, ys, zs), dens = BoundaryIntegral._resample_volume_to_uniform((xs, ys, zs), dens)
+        (xs, ys, zs), dens = _resample_volume_to_uniform((xs, ys, zs), dens)
     end
 
     colormap = to_colormap(:plasma)
@@ -363,8 +363,8 @@ function viz_3d!(
         (first(zs), last(zs)),
         dens;
         colormap = colormap,
-        algorithm = algorithm,
-        absorption=4f0
+        # algorithm = algorithm,
+        # absorption=4f0
     )
     return ax
 end
