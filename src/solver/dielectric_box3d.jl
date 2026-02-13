@@ -94,3 +94,65 @@ function Rhs_dielectric_box3d(interface::DielectricInterface{P, T}, ps::PointSou
     end
     return Rhs
 end
+
+function Rhs_dielectric_box3d(interface::DielectricInterface{P, T}, vs::VolumeSource{T, 3}, eps_src::T) where {P <: AbstractPanel, T}
+    xs, ys, zs = vs.axes
+    weights = vs.weights
+    density = vs.density
+    n_points = num_points(interface)
+    Rhs = zeros(T, n_points)
+    for (i, point) in enumerate(eachpoint(interface))
+        acc = zero(T)
+        for ix in eachindex(xs), iy in eachindex(ys), iz in eachindex(zs)
+            pos = volume_source_point(vs, ix, iy, iz)
+            acc += weights[ix, iy, iz] * density[ix, iy, iz] *
+                laplace3d_grad(pos, point.panel_point.point, point.panel_point.normal)
+        end
+        Rhs[i] = -acc / eps_src
+    end
+    return Rhs
+end
+
+function Rhs_dielectric_box3d_fmm3d(
+    interface::DielectricInterface{P, Float64},
+    vs::VolumeSource{Float64, 3},
+    eps_src::Float64,
+    thresh::Float64,
+) where {P <: AbstractPanel}
+    xs, ys, zs = vs.axes
+    weights = vs.weights
+    density = vs.density
+    nx, ny, nz = length(xs), length(ys), length(zs)
+    n_sources = nx * ny * nz
+    sources = zeros(Float64, 3, n_sources)
+    charges = zeros(Float64, n_sources)
+    idx = 0
+    for ix in 1:nx, iy in 1:ny, iz in 1:nz
+        idx += 1
+        pos = volume_source_point(vs, ix, iy, iz)
+        sources[1, idx] = pos[1]
+        sources[2, idx] = pos[2]
+        sources[3, idx] = pos[3]
+        charges[idx] = weights[ix, iy, iz] * density[ix, iy, iz]
+    end
+
+    n_points = num_points(interface)
+    targets = zeros(Float64, 3, n_points)
+    normals = zeros(Float64, 3, n_points)
+    for (i, point) in enumerate(eachpoint(interface))
+        targets[1, i] = point.panel_point.point[1]
+        targets[2, i] = point.panel_point.point[2]
+        targets[3, i] = point.panel_point.point[3]
+        normals[1, i] = point.panel_point.normal[1]
+        normals[2, i] = point.panel_point.normal[2]
+        normals[3, i] = point.panel_point.normal[3]
+    end
+
+    vals = lfmm3d(thresh, sources, charges = charges, targets = targets, pgt = 2)
+    grad = vals.gradtarg
+    Rhs = zeros(Float64, n_points)
+    for i in 1:n_points
+        Rhs[i] = dot(normals[:, i], grad[:, i]) / (4π * eps_src)
+    end
+    return Rhs
+end

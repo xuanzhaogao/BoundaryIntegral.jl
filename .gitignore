@@ -7,3 +7,4 @@ Manifest*.toml
 *.jl.mem
 /docs/Manifest*.toml
 /docs/build/
+.worktrees/

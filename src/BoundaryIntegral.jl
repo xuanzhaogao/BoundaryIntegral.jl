@@ -1,10 +1,11 @@
 module BoundaryIntegral
 
-using LinearAlgebra
-using SparseArrays
-using FastGaussQuadrature, LegendrePolynomials
+using LinearAlgebra, Statistics
+using SparseArrays, StaticArrays
+using FastGaussQuadrature, LegendrePolynomials, SpecialFunctions
 using Krylov, LinearMaps, Roots, HCubature
 using NearestNeighbors
+using ForwardDiff
 
 using FMM2D, FMM3D
 
@@ -13,8 +14,9 @@ export FlatPanel
 export DielectricInterface
 export rhs_approx
 export interface_approx
+export interface_uniform_samples
 
-export PointSource
+export PointSource, VolumeSource
 
 # kernel functions
 export laplace2d_pot, laplace2d_grad
@@ -37,13 +39,15 @@ export single_dielectric_box3d_rhs_adaptive_varquad
 
 # solvers
 export Lhs_dielectric_box2d, Lhs_dielectric_box2d_fmm2d, Rhs_dielectric_box2d
-export Lhs_dielectric_box3d, Lhs_dielectric_box3d_fmm3d, Rhs_dielectric_box3d
+export Lhs_dielectric_box3d, Lhs_dielectric_box3d_fmm3d, Rhs_dielectric_box3d, Rhs_dielectric_box3d_fmm3d
 
 # linear algebra
 export solve_lu, solve_gmres
 
 # visualization
 export viz_2d, viz_3d
+export viz_3d_surface
+export viz_3d_interface_solution
 
 # core types
 include("core/panels.jl")
@@ -65,6 +69,8 @@ include("utils/barycentric.jl")
 include("utils/bernstein.jl")
 include("utils/quad_order.jl")
 include("utils/best_grid.jl")
+include("utils/gaussians.jl")
+include("utils/xsf_reader.jl")
 
 # # solvers
 include("solver/dielectric_box2d.jl")
