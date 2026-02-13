@@ -21,6 +21,60 @@ struct VolumeSource{T, D} <: AbstractSource
     axes::NTuple{D, Vector{T}}
     weights::Array{T, D}
     density::Array{T, D}
+    origin::NTuple{D, T}
+    basis::NTuple{D, NTuple{D, T}}
+end
+
+function _identity_basis(::Type{T}, ::Val{3}) where {T}
+    return (
+        (one(T), zero(T), zero(T)),
+        (zero(T), one(T), zero(T)),
+        (zero(T), zero(T), one(T)),
+    )
+end
+
+function _validate_volume_source_grid(
+    axes::NTuple{3, Vector{T}},
+    weights::Array{T, 3},
+    density::Array{T, 3},
+) where {T}
+    nx, ny, nz = length(axes[1]), length(axes[2]), length(axes[3])
+    size(weights) == (nx, ny, nz) || throw(ArgumentError("weights shape must match axes lengths"))
+    size(density) == (nx, ny, nz) || throw(ArgumentError("density shape must match axes lengths"))
+    return nothing
+end
+
+function VolumeSource{T, 3}(axes::NTuple{3, Vector{T}}, weights::Array{T, 3}, density::Array{T, 3}) where {T}
+    _validate_volume_source_grid(axes, weights, density)
+    return VolumeSource{T, 3}(axes, weights, density, (zero(T), zero(T), zero(T)), _identity_basis(T, Val(3)))
+end
+
+function VolumeSource(axes::NTuple{3, Vector{T}}, weights::Array{T, 3}, density::Array{T, 3}) where {T}
+    return VolumeSource{T, 3}(axes, weights, density)
+end
+
+function VolumeSource(
+    axes::NTuple{3, Vector{T}},
+    weights::Array{T, 3},
+    density::Array{T, 3},
+    origin::NTuple{3, T},
+    basis::NTuple{3, NTuple{3, T}},
+) where {T}
+    _validate_volume_source_grid(axes, weights, density)
+    return VolumeSource{T, 3}(axes, weights, density, origin, basis)
+end
+
+function volume_source_point(vs::VolumeSource{T, 3}, ix::Int, iy::Int, iz::Int) where {T}
+    u = vs.axes[1][ix]
+    v = vs.axes[2][iy]
+    w = vs.axes[3][iz]
+    o = vs.origin
+    a, b, c = vs.basis
+    return (
+        o[1] + u * a[1] + v * b[1] + w * c[1],
+        o[2] + u * a[2] + v * b[2] + w * c[2],
+        o[3] + u * a[3] + v * b[3] + w * c[3],
+    )
 end
 
 function _is_uniform_axis(axis::AbstractVector{T}; rtol::T = sqrt(eps(T)), atol::T = zero(T)) where {T}
@@ -63,7 +117,7 @@ function VolumeSource(points::Vector{NTuple{3, T}}, weights::Vector{T}, density:
     end
 
     all(filled) || throw(ArgumentError("points must cover the full tensor grid"))
-    return VolumeSource{T, 3}((xs, ys, zs), wx, dens)
+    return VolumeSource((xs, ys, zs), wx, dens)
 end
 
 function GaussianVolumeSource(center::NTuple{3, T}, σ::T, n::Int, tol::T) where T
@@ -97,7 +151,7 @@ function GaussianVolumeSource(center::NTuple{3, T}, σ::T, n::Int, tol::T) where
         end
     end
 
-    return VolumeSource{T, 3}((xs, ys, zs), weights, density)
+    return VolumeSource((xs, ys, zs), weights, density)
 end
 
 function _gaussian_quad_order(σ::T, tol::T; n_max::Int = 64) where T

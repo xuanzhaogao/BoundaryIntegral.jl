@@ -12,6 +12,7 @@ using Test
     include("utils/best_grid.jl")
 
     # core
+    include("core/panels.jl")
     include("core/sources.jl")
 
     # kernel functions

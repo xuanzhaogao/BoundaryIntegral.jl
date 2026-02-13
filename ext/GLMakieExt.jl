@@ -5,7 +5,7 @@ using BoundaryIntegral
 using BoundaryIntegral: VolumeSource
 using BoundaryIntegral: AbstractPanel, DielectricInterface, build_neighbor_list
 
-import BoundaryIntegral: viz_2d, viz_3d
+import BoundaryIntegral: viz_2d, viz_3d, viz_3d_surface, viz_3d_interface_solution, num_points, eachpoint
 
 function _resample_volume_to_uniform(axes::NTuple{3, Vector{T}}, density::AbstractArray{T, 3}) where {T}
     xs, ys, zs = axes
@@ -338,49 +338,131 @@ function viz_3d(
     return fig
 end
 
-function viz_3d!(
+function _is_identity_affine(source::VolumeSource{T, 3}) where {T}
+    tol = sqrt(eps(float(T)))
+    o = source.origin
+    b = source.basis
+    return isapprox(o[1], zero(T); atol = tol, rtol = tol) &&
+        isapprox(o[2], zero(T); atol = tol, rtol = tol) &&
+        isapprox(o[3], zero(T); atol = tol, rtol = tol) &&
+        isapprox(b[1][1], one(T); atol = tol, rtol = tol) &&
+        isapprox(b[1][2], zero(T); atol = tol, rtol = tol) &&
+        isapprox(b[1][3], zero(T); atol = tol, rtol = tol) &&
+        isapprox(b[2][1], zero(T); atol = tol, rtol = tol) &&
+        isapprox(b[2][2], one(T); atol = tol, rtol = tol) &&
+        isapprox(b[2][3], zero(T); atol = tol, rtol = tol) &&
+        isapprox(b[3][1], zero(T); atol = tol, rtol = tol) &&
+        isapprox(b[3][2], zero(T); atol = tol, rtol = tol) &&
+        isapprox(b[3][3], one(T); atol = tol, rtol = tol)
+end
+
+function _source_color_values(
+    dens::AbstractArray{T, 3},
+    log_density::Bool,
+    log_floor::Real,
+) where {T}
+    if log_density
+        return log10.(abs.(float.(dens)) .+ float(log_floor))
+    end
+    return float.(dens)
+end
+
+function _viz_3d_source_plot!(
     ax::Axis3,
     source::VolumeSource{T, 3};
-    colorrange::Union{Nothing, Tuple{T, T}} = nothing,
-    min_density::T = zero(T),
+    colorrange::Union{Nothing, Tuple} = nothing,
+    min_density::Real = zero(T),
     markersize::Real = 6,
     alpha::Real = 0.8,
     algorithm = :mip,
+    log_density::Bool = false,
+    log_floor::Real = 1e-16,
+    max_points::Int = 120_000,
 ) where {T}
     xs, ys, zs = source.axes
     dens = source.density
-    if !(BoundaryIntegral._is_uniform_axis(xs) && BoundaryIntegral._is_uniform_axis(ys) && BoundaryIntegral._is_uniform_axis(zs))
-        (xs, ys, zs), dens = _resample_volume_to_uniform((xs, ys, zs), dens)
+    dens_vals = _source_color_values(dens, log_density, log_floor)
+
+    if _is_identity_affine(source)
+        if !(BoundaryIntegral._is_uniform_axis(xs) && BoundaryIntegral._is_uniform_axis(ys) && BoundaryIntegral._is_uniform_axis(zs))
+            (xs, ys, zs), dens_vals = _resample_volume_to_uniform((xs, ys, zs), dens_vals)
+        end
+
+        colormap = log_density ? :viridis : begin
+            cm = to_colormap(:plasma)
+            cm[1] = RGBAf(0, 0, 0, 0)
+            cm
+        end
+
+        return volume!(
+            ax,
+            (first(xs), last(xs)),
+            (first(ys), last(ys)),
+            (first(zs), last(zs)),
+            dens_vals;
+            colormap = colormap,
+            colorrange = colorrange,
+            # algorithm = algorithm,
+            # absorption=4f0
+        )
     end
 
-    colormap = to_colormap(:plasma)
-    colormap[1] = RGBAf(0,0,0,0)
+    nx, ny, nz = size(dens)
+    n_total = nx * ny * nz
+    stride = max(1, ceil(Int, (n_total / max_points)^(1 / 3)))
+    min_abs = float(min_density)
 
-    volume!(
+    px = Float32[]
+    py = Float32[]
+    pz = Float32[]
+    cv = Float32[]
+    for i in 1:stride:nx, j in 1:stride:ny, k in 1:stride:nz
+        v_raw = dens[i, j, k]
+        abs(v_raw) < min_abs && continue
+        p = BoundaryIntegral.volume_source_point(source, i, j, k)
+        push!(px, Float32(p[1]))
+        push!(py, Float32(p[2]))
+        push!(pz, Float32(p[3]))
+        push!(cv, Float32(dens_vals[i, j, k]))
+    end
+    isempty(cv) && throw(ArgumentError("No points to plot. Decrease min_density or increase max_points."))
+    lo = minimum(cv)
+    hi = maximum(cv)
+    if lo == hi
+        delta = max(abs(lo), 1f0) * 1f-6
+        lo -= delta
+        hi += delta
+    end
+    cr = isnothing(colorrange) ? (lo, hi) : colorrange
+
+    cmap = log_density ? :viridis : :balance
+    return scatter!(
         ax,
-        (first(xs), last(xs)),
-        (first(ys), last(ys)),
-        (first(zs), last(zs)),
-        dens;
-        colormap = colormap,
-        # algorithm = algorithm,
-        # absorption=4f0
+        px,
+        py,
+        pz;
+        color = cv,
+        colormap = cmap,
+        colorrange = cr,
+        markersize = markersize,
+        transparency = true,
+        alpha = alpha,
     )
-    return ax
 end
 
-function viz_3d(
+function viz_3d!(
+    ax::Axis3,
     source::VolumeSource{T, 3};
-    colorrange::Union{Nothing, Tuple{T, T}} = nothing,
-    min_density::T = zero(T),
+    colorrange::Union{Nothing, Tuple} = nothing,
+    min_density::Real = zero(T),
     markersize::Real = 6,
     alpha::Real = 0.8,
     algorithm = :mip,
-    size = (700, 600),
+    log_density::Bool = false,
+    log_floor::Real = 1e-16,
+    max_points::Int = 120_000,
 ) where {T}
-    fig = Figure(size = size)
-    ax = Axis3(fig[1, 1], aspect = :data)
-    viz_3d!(
+    _viz_3d_source_plot!(
         ax,
         source;
         colorrange = colorrange,
@@ -388,7 +470,44 @@ function viz_3d(
         markersize = markersize,
         alpha = alpha,
         algorithm = algorithm,
+        log_density = log_density,
+        log_floor = log_floor,
+        max_points = max_points,
     )
+    return ax
+end
+
+function viz_3d(
+    source::VolumeSource{T, 3};
+    colorrange::Union{Nothing, Tuple} = nothing,
+    min_density::Real = zero(T),
+    markersize::Real = 6,
+    alpha::Real = 0.8,
+    algorithm = :mip,
+    log_density::Bool = false,
+    log_floor::Real = 1e-16,
+    max_points::Int = 120_000,
+    add_colorbar::Bool = false,
+    size = (700, 600),
+) where {T}
+    fig = Figure(size = size)
+    ax = Axis3(fig[1, 1], aspect = :data)
+    plt = _viz_3d_source_plot!(
+        ax,
+        source;
+        colorrange = colorrange,
+        min_density = min_density,
+        markersize = markersize,
+        alpha = alpha,
+        algorithm = algorithm,
+        log_density = log_density,
+        log_floor = log_floor,
+        max_points = max_points,
+    )
+    if add_colorbar
+        label = log_density ? "log10(|density|)" : "density"
+        Colorbar(fig[1, 2], plt, label = label)
+    end
     return fig
 end
 
@@ -414,6 +533,10 @@ function viz_3d(;
     markersize::Real = 6,
     alpha::Real = 0.8,
     algorithm = :mip,
+    log_density::Bool = false,
+    log_floor::Real = 1e-16,
+    max_points::Int = 120_000,
+    add_colorbar::Bool = false,
     size = (700, 600),
 )
     fig = Figure(size = size)
@@ -443,8 +566,9 @@ function viz_3d(;
     end
 
     if sources !== nothing
+        source_plot = nothing
         for source in (sources isa VolumeSource ? (sources,) : sources)
-            viz_3d!(
+            source_plot = _viz_3d_source_plot!(
                 ax,
                 source;
                 colorrange = colorrange,
@@ -452,8 +576,185 @@ function viz_3d(;
                 markersize = markersize,
                 alpha = alpha,
                 algorithm = algorithm,
+                log_density = log_density,
+                log_floor = log_floor,
+                max_points = max_points,
             )
         end
+        if add_colorbar && source_plot !== nothing
+            label = log_density ? "log10(|density|)" : "density"
+            Colorbar(fig[1, 2], source_plot, label = label)
+        end
+    end
+
+    return fig
+end
+
+function _surface_boundary_points(
+    source::VolumeSource{T, 3};
+    min_density::Real = zero(T),
+    log_density::Bool = false,
+    log_floor::Real = 1e-16,
+    max_points::Int = 120_000,
+) where {T}
+    dens = source.density
+    nx, ny, nz = size(dens)
+    n_surface = max(0, 2 * (nx * ny + ny * nz + nz * nx) - 4 * (nx + ny + nz) + 8)
+    stride = max(1, ceil(Int, cbrt(max(1, n_surface / max_points))))
+    min_abs = float(min_density)
+
+    px = Float32[]
+    py = Float32[]
+    pz = Float32[]
+    cv = Float32[]
+
+    for i in 1:stride:nx, j in 1:stride:ny, k in 1:stride:nz
+        on_surface = (i == 1 || i == nx || j == 1 || j == ny || k == 1 || k == nz)
+        on_surface || continue
+        v_raw = dens[i, j, k]
+        abs(v_raw) < min_abs && continue
+        p = BoundaryIntegral.volume_source_point(source, i, j, k)
+        v = log_density ? log10(abs(float(v_raw)) + float(log_floor)) : float(v_raw)
+        push!(px, Float32(p[1]))
+        push!(py, Float32(p[2]))
+        push!(pz, Float32(p[3]))
+        push!(cv, Float32(v))
+    end
+    isempty(cv) && throw(ArgumentError("No surface points to plot. Decrease min_density or increase max_points."))
+    return px, py, pz, cv
+end
+
+function viz_3d_surface!(
+    ax::Axis3,
+    source::VolumeSource{T, 3};
+    colorrange::Union{Nothing, Tuple} = nothing,
+    min_density::Real = zero(T),
+    markersize::Real = 5,
+    alpha::Real = 0.9,
+    log_density::Bool = false,
+    log_floor::Real = 1e-16,
+    max_points::Int = 120_000,
+) where {T}
+    px, py, pz, cv = _surface_boundary_points(
+        source;
+        min_density = min_density,
+        log_density = log_density,
+        log_floor = log_floor,
+        max_points = max_points,
+    )
+    lo = minimum(cv)
+    hi = maximum(cv)
+    if lo == hi
+        delta = max(abs(lo), 1f0) * 1f-6
+        lo -= delta
+        hi += delta
+    end
+    cr = isnothing(colorrange) ? (lo, hi) : colorrange
+    cmap = log_density ? :viridis : :balance
+    return scatter!(
+        ax,
+        px,
+        py,
+        pz;
+        color = cv,
+        colormap = cmap,
+        colorrange = cr,
+        markersize = markersize,
+        transparency = true,
+        alpha = alpha,
+    )
+end
+
+function viz_3d_surface(
+    source::VolumeSource{T, 3};
+    colorrange::Union{Nothing, Tuple} = nothing,
+    min_density::Real = zero(T),
+    markersize::Real = 5,
+    alpha::Real = 0.9,
+    log_density::Bool = false,
+    log_floor::Real = 1e-16,
+    max_points::Int = 120_000,
+    add_colorbar::Bool = true,
+    size = (700, 600),
+) where {T}
+    fig = Figure(size = size)
+    ax = Axis3(fig[1, 1], aspect = :data)
+    plt = viz_3d_surface!(
+        ax,
+        source;
+        colorrange = colorrange,
+        min_density = min_density,
+        markersize = markersize,
+        alpha = alpha,
+        log_density = log_density,
+        log_floor = log_floor,
+        max_points = max_points,
+    )
+    if add_colorbar
+        label = log_density ? "log10(|density|)" : "density"
+        Colorbar(fig[1, 2], plt, label = label)
+    end
+    return fig
+end
+
+function viz_3d_interface_solution(
+    interface::DielectricInterface{P, T},
+    values::AbstractVector{<:Real};
+    colorrange::Union{Nothing, Tuple} = nothing,
+    markersize::Real = 5,
+    alpha::Real = 0.9,
+    log_abs::Bool = false,
+    log_floor::Real = 1e-16,
+    n_sample::Int = 20,
+    add_colorbar::Bool = true,
+    size = (700, 600),
+) where {P <: AbstractPanel, T}
+    samples = BoundaryIntegral.interface_uniform_samples(interface, values; n_sample = n_sample)
+    isempty(samples) && throw(ArgumentError("no interface surfaces detected for visualization"))
+
+    lo = typemax(Float64)
+    hi = typemin(Float64)
+    for s in samples
+        V = s.V
+        vmin = minimum(V)
+        vmax = maximum(V)
+        if log_abs
+            vmin = minimum(log10.(abs.(V) .+ log_floor))
+            vmax = maximum(log10.(abs.(V) .+ log_floor))
+        end
+        lo = min(lo, vmin)
+        hi = max(hi, vmax)
+    end
+    if lo == hi
+        delta = max(abs(lo), 1.0) * 1e-6
+        lo -= delta
+        hi += delta
+    end
+    cr = isnothing(colorrange) ? (Float32(lo), Float32(hi)) : colorrange
+
+    fig = Figure(size = size)
+    ax = Axis3(fig[1, 1], aspect = :data)
+    cmap = log_abs ? :viridis : :balance
+    plt = nothing
+    for s in samples
+        color_vals = log_abs ? log10.(abs.(s.V) .+ log_floor) : s.V
+        plt = surface!(
+            ax,
+            s.X,
+            s.Y,
+            s.Z;
+            color = color_vals,
+            colormap = cmap,
+            colorrange = cr,
+            shading = NoShading,
+            transparency = alpha < 1,
+            alpha = alpha,
+        )
+    end
+
+    if add_colorbar
+        label = log_abs ? "log10(res)" : "res"
+        Colorbar(fig[1, 2], plt, label = label)
     end
 
     return fig

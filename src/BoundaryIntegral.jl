@@ -1,7 +1,7 @@
 module BoundaryIntegral
 
-using LinearAlgebra
-using SparseArrays
+using LinearAlgebra, Statistics
+using SparseArrays, StaticArrays
 using FastGaussQuadrature, LegendrePolynomials, SpecialFunctions
 using Krylov, LinearMaps, Roots, HCubature
 using NearestNeighbors
@@ -14,6 +14,7 @@ export FlatPanel
 export DielectricInterface
 export rhs_approx
 export interface_approx
+export interface_uniform_samples
 
 export PointSource, VolumeSource
 
@@ -45,6 +46,8 @@ export solve_lu, solve_gmres
 
 # visualization
 export viz_2d, viz_3d
+export viz_3d_surface
+export viz_3d_interface_solution
 
 # core types
 include("core/panels.jl")
@@ -67,6 +70,7 @@ include("utils/bernstein.jl")
 include("utils/quad_order.jl")
 include("utils/best_grid.jl")
 include("utils/gaussians.jl")
+include("utils/xsf_reader.jl")
 
 # # solvers
 include("solver/dielectric_box2d.jl")

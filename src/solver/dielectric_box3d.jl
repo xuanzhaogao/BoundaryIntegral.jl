@@ -104,7 +104,7 @@ function Rhs_dielectric_box3d(interface::DielectricInterface{P, T}, vs::VolumeSo
     for (i, point) in enumerate(eachpoint(interface))
         acc = zero(T)
         for ix in eachindex(xs), iy in eachindex(ys), iz in eachindex(zs)
-            pos = (xs[ix], ys[iy], zs[iz])
+            pos = volume_source_point(vs, ix, iy, iz)
             acc += weights[ix, iy, iz] * density[ix, iy, iz] *
                 laplace3d_grad(pos, point.panel_point.point, point.panel_point.normal)
         end
@@ -129,9 +129,10 @@ function Rhs_dielectric_box3d_fmm3d(
     idx = 0
     for ix in 1:nx, iy in 1:ny, iz in 1:nz
         idx += 1
-        sources[1, idx] = xs[ix]
-        sources[2, idx] = ys[iy]
-        sources[3, idx] = zs[iz]
+        pos = volume_source_point(vs, ix, iy, iz)
+        sources[1, idx] = pos[1]
+        sources[2, idx] = pos[2]
+        sources[3, idx] = pos[3]
         charges[idx] = weights[ix, iy, iz] * density[ix, iy, iz]
     end
 

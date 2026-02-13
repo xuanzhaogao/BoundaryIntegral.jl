@@ -1,5 +1,6 @@
 using BoundaryIntegral
 using Random
+using StaticArrays
 using Test
 
 @testset "VolumeSource grid" begin
@@ -105,4 +106,25 @@ end
     end
 
     @test_throws UndefVarError BoundaryIntegral._resample_volume_to_uniform((xs, ys, zs), dens)
+end
+
+@testset "VolumeSource from XSF datagrid supports parallelepiped cells" begin
+    nx, ny, nz = 3, 3, 3
+    origin = SVector(0.2, -0.1, 0.4)
+    A = SVector(2.0, 0.0, 0.0)
+    B = SVector(0.5, 1.5, 0.0)
+    C = SVector(0.25, 0.0, 1.0)
+    values = reshape(collect(1.0:(nx * ny * nz)), nx, ny, nz)
+    datagrid = (nx = nx, ny = ny, nz = nz, origin = origin, A = A, B = B, C = C, values = values)
+
+    src = BoundaryIntegral.VolumeSource(datagrid)
+
+    @test size(src.density) == (nx, ny, nz)
+    @test src.density == values
+    @test BoundaryIntegral.volume_source_point(src, 3, 2, 1) ==
+        BoundaryIntegral.grid_point(datagrid, 3, 2, 1)
+
+    At, Bt, Ct = BoundaryIntegral.true_cell_vectors(datagrid)
+    jac = abs(det(hcat(collect(At), collect(Bt), collect(Ct))))
+    @test all(isapprox.(src.weights, fill(jac / (nx * ny * nz), nx, ny, nz)))
 end

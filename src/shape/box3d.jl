@@ -209,9 +209,10 @@ function _volume_source_fmm_sources(vs::VolumeSource{T, 3}) where T
     s = 0
     for ix in 1:nx, iy in 1:ny, iz in 1:nz
         s += 1
-        sources[1, s] = xs_src[ix]
-        sources[2, s] = ys_src[iy]
-        sources[3, s] = zs_src[iz]
+        pos = volume_source_point(vs, ix, iy, iz)
+        sources[1, s] = pos[1]
+        sources[2, s] = pos[2]
+        sources[3, s] = pos[3]
         charges[s] = weights[ix, iy, iz] * density[ix, iy, iz]
     end
     return sources, charges

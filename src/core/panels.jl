@@ -224,3 +224,107 @@ function rhs_approx(interface::DielectricInterface{FlatPanel{T, 3}, T}, rhs::Fun
     end
     return interface_approx(interface, values; tol = tol)
 end
+
+function interface_uniform_samples(
+    interface::DielectricInterface{FlatPanel{T, 3}, T},
+    values::AbstractVector{<:Real};
+    n_sample::Int = 20,
+    tol::T = sqrt(eps(T)),
+) where T
+    n_sample >= 2 || throw(ArgumentError("n_sample must be >= 2"))
+    length(values) == num_points(interface) || throw(ArgumentError("values length must match num_points(interface)"))
+
+    vals = T.(values)
+    approx = interface_approx(interface, vals; tol = tol)
+    # Group panels by coplanar surface (normal + plane offset).
+    function canonical_normal(n::NTuple{3, T})
+        nn = norm(n)
+        nn > zero(T) || throw(ArgumentError("panel normal has zero norm"))
+        nu = n ./ nn
+        sign_flip = (nu[1] < -tol) || (abs(nu[1]) <= tol && nu[2] < -tol) || (abs(nu[1]) <= tol && abs(nu[2]) <= tol && nu[3] < -tol)
+        return sign_flip ? (-nu[1], -nu[2], -nu[3]) : nu
+    end
+
+    quant_scale = T(1e6)
+    q(x) = round(Int, x * quant_scale)
+    surface_groups = Dict{NTuple{4, Int}, Vector{Int}}()
+
+    for (pi, panel) in enumerate(interface.panels)
+        n = canonical_normal(panel.normal)
+        a, b, c, d = panel.corners
+        center = (a .+ b .+ c .+ d) ./ 4
+        offset = dot(n, center)
+        key = (q(n[1]), q(n[2]), q(n[3]), q(offset))
+        push!(get!(surface_groups, key, Int[]), pi)
+    end
+
+    function cross3(a::NTuple{3, T}, b::NTuple{3, T})
+        return (
+            a[2] * b[3] - a[3] * b[2],
+            a[3] * b[1] - a[1] * b[3],
+            a[1] * b[2] - a[2] * b[1],
+        )
+    end
+
+    samples = Vector{NamedTuple{(:X, :Y, :Z, :V), Tuple{Matrix{T}, Matrix{T}, Matrix{T}, Matrix{T}}}}()
+
+    for panel_ids in Base.values(surface_groups)
+        first_panel = interface.panels[first(panel_ids)]
+        n = canonical_normal(first_panel.normal)
+
+        a0, b0, c0, d0 = first_panel.corners
+        edge = b0 .- a0
+        edge_n = norm(edge)
+        if edge_n <= tol
+            edge = d0 .- a0
+            edge_n = norm(edge)
+        end
+        edge_n > tol || throw(ArgumentError("could not infer tangential axis for surface"))
+        e1 = edge ./ edge_n
+        e2_raw = cross3(n, e1)
+        e2_n = norm(e2_raw)
+        e2_n > tol || throw(ArgumentError("could not infer second tangential axis for surface"))
+        e2 = e2_raw ./ e2_n
+
+        origin = a0
+        smin = typemax(T)
+        smax = typemin(T)
+        tmin = typemax(T)
+        tmax = typemin(T)
+        for pid in panel_ids
+            panel = interface.panels[pid]
+            for corner in panel.corners
+                rel = corner .- origin
+                s = dot(rel, e1)
+                t = dot(rel, e2)
+                smin = min(smin, s)
+                smax = max(smax, s)
+                tmin = min(tmin, t)
+                tmax = max(tmax, t)
+            end
+        end
+
+        ss = collect(LinRange(smin, smax, n_sample))
+        tt = collect(LinRange(tmin, tmax, n_sample))
+        X = Matrix{T}(undef, n_sample, n_sample)
+        Y = Matrix{T}(undef, n_sample, n_sample)
+        Z = Matrix{T}(undef, n_sample, n_sample)
+        V = Matrix{T}(undef, n_sample, n_sample)
+
+        for j in 1:n_sample
+            t = tt[j]
+            for i in 1:n_sample
+                s = ss[i]
+                p = origin .+ e1 .* s .+ e2 .* t
+                X[i, j] = p[1]
+                Y[i, j] = p[2]
+                Z[i, j] = p[3]
+                V[i, j] = approx((p[1], p[2], p[3]))
+            end
+        end
+
+        push!(samples, (X = X, Y = Y, Z = Z, V = V))
+    end
+
+    return samples
+end
