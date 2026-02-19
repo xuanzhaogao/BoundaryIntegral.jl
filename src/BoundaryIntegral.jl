@@ -29,6 +29,7 @@ export laplace3d_S_fmm3d, laplace3d_DT_fmm3d, laplace3d_D_fmm3d, laplace3d_pottr
 export laplace3d_DT_fmm3d_corrected
 export laplace3d_DT_fmm3d_corrected_hcubature
 export laplace3d_D_fmm3d_corrected
+export laplace3d_pottrg_fmm3d_corrected_hcubature
 export laplace3d_pottrg_near
 
 # shapes

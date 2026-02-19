@@ -620,3 +620,108 @@ end
 
     @test norm(got - expected, Inf) < 1e-10
 end
+
+@testset "laplace3d_pottrg_fmm3d_corrected_hcubature" begin
+    ns, ws = gausslegendre(3)
+    ns = Float64.(ns)
+    ws = Float64.(ws)
+
+    normal = (0.0, 0.0, 1.0)
+    p1 = BI.rect_panel3d_discretize(
+        (-0.5, -0.5, 0.0),
+        (0.5, -0.5, 0.0),
+        (0.5, 0.5, 0.0),
+        (-0.5, 0.5, 0.0),
+        ns,
+        ws,
+        normal,
+    )
+    p2 = BI.rect_panel3d_discretize(
+        (-0.5, -0.5, 0.15),
+        (0.5, -0.5, 0.15),
+        (0.5, 0.5, 0.15),
+        (-0.5, 0.5, 0.15),
+        ns,
+        ws,
+        normal,
+    )
+    p3 = BI.rect_panel3d_discretize(
+        (1.2, 1.2, 0.8),
+        (1.4, 1.2, 0.8),
+        (1.4, 1.4, 0.8),
+        (1.2, 1.4, 0.8),
+        ns,
+        ws,
+        normal,
+    )
+
+    interface = BI.DielectricInterface([p1, p2, p3], fill(2.0, 3), fill(1.0, 3))
+    n = BI.num_points(interface)
+    sigma = [cos(0.15 * i) + 0.1 * sin(0.27 * i) for i in 1:n]
+
+    targets = [
+        0.05  -0.10   0.30;
+        0.04   0.06  -0.20;
+        0.01   0.18   0.55
+    ]
+
+    fmm_tol = 1e-10
+    hcub_tol = 1e-9
+    range_factor = 5.0
+
+    base = BI.laplace3d_pottrg_fmm3d(interface, targets, fmm_tol)
+    corrected = BI.laplace3d_pottrg_fmm3d_corrected_hcubature(interface, targets, fmm_tol, hcub_tol, range_factor)
+
+    ref = zeros(Float64, size(targets, 2))
+    for j in 1:size(targets, 2)
+        target = (targets[1, j], targets[2, j], targets[3, j])
+        ref[j] = BI.laplace3d_pottrg_near(interface, target, sigma, hcub_tol; range_factor = 1e12)
+    end
+
+    err_base = norm(base * sigma - ref, Inf)
+    err_corrected = norm(corrected * sigma - ref, Inf)
+    @test err_corrected < err_base
+    @test err_corrected < 1e-7
+end
+
+@testset "laplace3d_pottrg_fmm3d_corrected_hcubature empty near list" begin
+    ns, ws = gausslegendre(2)
+    ns = Float64.(ns)
+    ws = Float64.(ws)
+
+    normal = (0.0, 0.0, 1.0)
+    p1 = BI.rect_panel3d_discretize(
+        (-0.5, -0.5, 0.0),
+        (0.5, -0.5, 0.0),
+        (0.5, 0.5, 0.0),
+        (-0.5, 0.5, 0.0),
+        ns,
+        ws,
+        normal,
+    )
+    p2 = BI.rect_panel3d_discretize(
+        (-0.5, -0.5, 0.2),
+        (0.5, -0.5, 0.2),
+        (0.5, 0.5, 0.2),
+        (-0.5, 0.5, 0.2),
+        ns,
+        ws,
+        normal,
+    )
+    interface = BI.DielectricInterface([p1, p2], fill(2.0, 2), fill(1.0, 2))
+
+    targets = [
+        3.0  3.5;
+        3.0  3.5;
+        3.0  3.5
+    ]
+    fmm_tol = 1e-10
+    hcub_tol = 1e-8
+    range_factor = 0.1
+
+    base = BI.laplace3d_pottrg_fmm3d(interface, targets, fmm_tol)
+    corrected = BI.laplace3d_pottrg_fmm3d_corrected_hcubature(interface, targets, fmm_tol, hcub_tol, range_factor)
+
+    sigma = [sin(0.3 * i) for i in 1:BI.num_points(interface)]
+    @test norm(corrected * sigma - base * sigma, Inf) < 1e-12
+end
