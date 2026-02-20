@@ -49,6 +49,7 @@ export solve_lu, solve_gmres
 export viz_2d, viz_3d
 export viz_3d_surface
 export viz_3d_interface_solution
+export viz_3d_zslice
 
 # core types
 include("core/panels.jl")

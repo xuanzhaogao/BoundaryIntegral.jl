@@ -5,7 +5,7 @@ using BoundaryIntegral
 using BoundaryIntegral: VolumeSource
 using BoundaryIntegral: AbstractPanel, DielectricInterface, build_neighbor_list
 
-import BoundaryIntegral: viz_2d, viz_3d, viz_3d_surface, viz_3d_interface_solution, num_points, eachpoint
+import BoundaryIntegral: viz_2d, viz_3d, viz_3d_surface, viz_3d_interface_solution, viz_3d_zslice, num_points, eachpoint
 
 function _resample_volume_to_uniform(axes::NTuple{3, Vector{T}}, density::AbstractArray{T, 3}) where {T}
     xs, ys, zs = axes
@@ -689,6 +689,91 @@ function viz_3d_surface(
         log_density = log_density,
         log_floor = log_floor,
         max_points = max_points,
+    )
+    if add_colorbar
+        label = log_density ? "log10(|density|)" : "density"
+        Colorbar(fig[1, 2], plt, label = label)
+    end
+    return fig
+end
+
+function viz_3d_zslice!(
+    ax::Axis,
+    datagrid;
+    iz::Union{Nothing, Int} = nothing,
+    z::Union{Nothing, Real} = nothing,
+    interpolation::Symbol = :trilinear,
+    nx_sample::Union{Nothing, Int} = nothing,
+    ny_sample::Union{Nothing, Int} = nothing,
+    colorrange::Union{Nothing, Tuple} = nothing,
+    log_density::Bool = false,
+    log_floor::Real = 1e-16,
+    colormap = nothing,
+)
+    s = BoundaryIntegral.datagrid_zslice(
+        datagrid;
+        iz = iz,
+        z = z,
+        interpolation = interpolation,
+        nx_sample = nx_sample,
+        ny_sample = ny_sample,
+        log_density = log_density,
+        log_floor = log_floor,
+    )
+    vals = s.values
+    finite_vals = filter(isfinite, vec(vals))
+    isempty(finite_vals) && throw(ArgumentError("No finite values on slice; choose a different z or sampling range"))
+    lo = minimum(finite_vals)
+    hi = maximum(finite_vals)
+    if lo == hi
+        delta = max(abs(lo), 1.0) * 1e-6
+        lo -= delta
+        hi += delta
+    end
+    cr = isnothing(colorrange) ? (lo, hi) : colorrange
+    cmap = isnothing(colormap) ? (log_density ? :viridis : :balance) : colormap
+    title = "z-slice: k=$(s.iz), z=$(round(s.z; digits = 6))"
+    ax.title = title
+    ax.xlabel = "x"
+    ax.ylabel = "y"
+    return heatmap!(
+        ax,
+        s.x,
+        s.y,
+        vals;
+        colorrange = cr,
+        colormap = cmap,
+    )
+end
+
+function viz_3d_zslice(
+    datagrid;
+    iz::Union{Nothing, Int} = nothing,
+    z::Union{Nothing, Real} = nothing,
+    interpolation::Symbol = :trilinear,
+    nx_sample::Union{Nothing, Int} = nothing,
+    ny_sample::Union{Nothing, Int} = nothing,
+    colorrange::Union{Nothing, Tuple} = nothing,
+    log_density::Bool = false,
+    log_floor::Real = 1e-16,
+    colormap = nothing,
+    add_colorbar::Bool = true,
+    size = (700, 600),
+)
+    fig = Figure(size = size)
+    ax = Axis(fig[1, 1], aspect = DataAspect())
+    plt = viz_3d_zslice!(
+        ax,
+        datagrid;
+        iz = iz,
+        z = z,
+        interpolation = interpolation,
+        nx_sample = nx_sample,
+        ny_sample = ny_sample,
+        colorrange = colorrange,
+        log_density = log_density,
+        log_floor = log_floor,
+        colormap = colormap,
     )
     if add_colorbar
         label = log_density ? "log10(|density|)" : "density"

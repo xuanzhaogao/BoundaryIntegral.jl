@@ -128,3 +128,70 @@ end
     jac = abs(det(hcat(collect(At), collect(Bt), collect(Ct))))
     @test all(isapprox.(src.weights, fill(jac / (nx * ny * nz), nx, ny, nz)))
 end
+
+@testset "datagrid_zslice extracts z-layers by index or z-value" begin
+    nx, ny, nz = 4, 3, 5
+    origin = SVector(0.0, 0.0, -1.0)
+    A = SVector(2.0, 0.0, 0.0)
+    B = SVector(0.0, 3.0, 0.0)
+    C = SVector(0.0, 0.0, 5.0)
+    values = reshape(collect(1.0:(nx * ny * nz)), nx, ny, nz)
+    datagrid = (nx = nx, ny = ny, nz = nz, origin = origin, A = A, B = B, C = C, values = values)
+
+    s_mid = BoundaryIntegral.datagrid_zslice(datagrid)
+    @test s_mid.iz == cld(nz, 2)
+    @test size(s_mid.values) == (nx, ny)
+    @test s_mid.values == values[:, :, cld(nz, 2)]
+
+    s_i = BoundaryIntegral.datagrid_zslice(datagrid; iz = 2)
+    @test s_i.iz == 2
+    @test s_i.values == values[:, :, 2]
+    @test length(s_i.x) == nx
+    @test length(s_i.y) == ny
+
+    z2 = BoundaryIntegral.grid_point(datagrid, 1, 1, 2)[3]
+    s_z = BoundaryIntegral.datagrid_zslice(datagrid; z = z2)
+    @test s_z.iz == 2
+    @test s_z.values == values[:, :, 2]
+
+    @test_throws ArgumentError BoundaryIntegral.datagrid_zslice(datagrid; iz = 0)
+    @test_throws ArgumentError BoundaryIntegral.datagrid_zslice(datagrid; iz = nz + 1)
+    @test_throws ArgumentError BoundaryIntegral.datagrid_zslice(datagrid; iz = 2, z = z2)
+end
+
+@testset "datagrid_zslice trilinear interpolation on skew lattice for z=z0" begin
+    nx, ny, nz = 5, 5, 5
+    origin = SVector(0.2, -0.1, 0.4)
+    A = SVector(1.0, 0.0, 0.25)
+    B = SVector(0.1, 1.2, 0.15)
+    C = SVector(0.2, 0.1, 1.5)
+    values = Array{Float64, 3}(undef, nx, ny, nz)
+    datagrid0 = (nx = nx, ny = ny, nz = nz, origin = origin, A = A, B = B, C = C, values = zeros(nx, ny, nz))
+
+    for i in 1:nx, j in 1:ny, k in 1:nz
+        x, y, z = BoundaryIntegral.grid_point(datagrid0, i, j, k)
+        values[i, j, k] = 2.0 * x - 3.0 * y + 0.5 * z + 1.0
+    end
+    datagrid = (nx = nx, ny = ny, nz = nz, origin = origin, A = A, B = B, C = C, values = values)
+
+    z0 = BoundaryIntegral.grid_point(datagrid, 3, 3, 3)[3]
+    s = BoundaryIntegral.datagrid_zslice(
+        datagrid;
+        z = z0,
+        nx_sample = 11,
+        ny_sample = 10,
+        interpolation = :trilinear,
+    )
+    @test size(s.values) == (11, 10)
+    finite_vals = [v for v in s.values if isfinite(v)]
+    @test !isempty(finite_vals)
+
+    max_err = 0.0
+    for i in eachindex(s.x), j in eachindex(s.y)
+        v = s.values[i, j]
+        isfinite(v) || continue
+        exact = 2.0 * s.x[i] - 3.0 * s.y[j] + 0.5 * z0 + 1.0
+        max_err = max(max_err, abs(v - exact))
+    end
+    @test max_err <= 1e-10
+end
