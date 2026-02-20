@@ -723,14 +723,24 @@ function viz_3d_zslice!(
     vals = s.values
     finite_vals = filter(isfinite, vec(vals))
     isempty(finite_vals) && throw(ArgumentError("No finite values on slice; choose a different z or sampling range"))
-    lo = minimum(finite_vals)
-    hi = maximum(finite_vals)
-    if lo == hi
-        delta = max(abs(lo), 1.0) * 1e-6
-        lo -= delta
-        hi += delta
+    if isnothing(colorrange)
+        if log_density
+            lo = minimum(finite_vals)
+            hi = maximum(finite_vals)
+            if lo == hi
+                delta = max(abs(lo), 1.0) * 1e-6
+                lo -= delta
+                hi += delta
+            end
+            cr = (lo, hi)
+        else
+            maxabs = maximum(abs, finite_vals)
+            maxabs = max(maxabs, 1e-12)
+            cr = (-maxabs, maxabs)
+        end
+    else
+        cr = colorrange
     end
-    cr = isnothing(colorrange) ? (lo, hi) : colorrange
     cmap = isnothing(colormap) ? (log_density ? :viridis : :balance) : colormap
     title = "z-slice: k=$(s.iz), z=$(round(s.z; digits = 6))"
     ax.title = title
