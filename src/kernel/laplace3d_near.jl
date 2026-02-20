@@ -149,6 +149,81 @@ function laplace3d_DT_panel_hcubature(panel_src::FlatPanel{T, 3}, panel_trg::Fla
     return DT_exact
 end
 
+function laplace3d_pot_panel_hcubature(
+    panel_src::FlatPanel{T, 3},
+    targets::Matrix{T},
+    target_ids::Vector{Int},
+    atol::T,
+) where T
+    ns = panel_src.gl_xs
+    ws = panel_src.gl_ws
+    λ = gl_barycentric_weights(ns, ws)
+    a, b, c, d = panel_src.corners
+    cc = (a .+ b .+ c .+ d) ./ 4
+    bma = b .- a
+    dma = d .- a
+    Lx = norm(b .- a)
+    Ly = norm(d .- a)
+    scale = Lx * Ly / 4
+
+    n_quad = panel_src.n_quad
+    n_src = n_quad * n_quad
+    pot_exact = zeros(T, length(target_ids), n_src)
+
+    Base.Threads.@threads for ti in 1:length(target_ids)
+        target_id = target_ids[ti]
+        target = (targets[1, target_id], targets[2, target_id], targets[3, target_id])
+
+        function integrand(x)
+            u = x[1]
+            v = x[2]
+            rx = T.(barycentric_row(ns, λ, u))
+            ry = T.(barycentric_row(ns, λ, v))
+            p = cc .+ bma .* (u / 2) .+ dma .* (v / 2)
+            k = laplace3d_pot(p, target) * scale
+            vals = Vector{T}(undef, n_src)
+            idx = 1
+            for ii in 1:n_quad
+                for jj in 1:n_quad
+                    vals[idx] = k * rx[ii] * ry[jj]
+                    idx += 1
+                end
+            end
+            return vals
+        end
+
+        res, _ = hcubature(integrand, T[-1, -1], T[1, 1]; atol = atol)
+        @views pot_exact[ti, :] .= res
+    end
+
+    return pot_exact
+end
+
+function build_target_neighbor_list(
+    interface::DielectricInterface{P, T},
+    targets::Matrix{T},
+    include_edges_src::Bool;
+    range_factor::T = T(5),
+) where {P <: AbstractPanel, T}
+    @assert size(targets, 1) == 3
+    neighbor_list = Dict{Int, Vector{Int}}()
+    tree = KDTree(targets)
+
+    for (i, panel) in enumerate(interface.panels)
+        (!include_edges_src && panel.is_edge) && continue
+
+        c_panel = (panel.corners[1] .+ panel.corners[2] .+ panel.corners[3] .+ panel.corners[4]) ./ 4
+        l_panel = max(norm(panel.corners[1] .- panel.corners[2]), norm(panel.corners[2] .- panel.corners[3]))
+        r_i = range_factor * l_panel / panel.n_quad
+
+        nearby = inrange(tree, collect(c_panel), r_i)
+        isempty(nearby) && continue
+        neighbor_list[i] = nearby
+    end
+
+    return neighbor_list
+end
+
 # neighbor list describes the pair of panels that are near each other and the order needed for evaluation
 function build_neighbor_list(
     interface::DielectricInterface{P, T},
@@ -369,6 +444,46 @@ function laplace3d_DT_corrections_hcubature(
     return sparse(rows, cols, vals, total_n, total_n)
 end
 
+function laplace3d_pottrg_corrections_hcubature(
+    interface::DielectricInterface{P, T},
+    targets::Matrix{T},
+    target_neighbor_list::Dict{Int, Vector{Int}},
+    atol::T,
+) where {P <: AbstractPanel, T}
+    cnt = zeros(Int, length(interface.panels))
+    for i in 1:length(interface.panels)
+        cnt[i] = length(interface.panels[i].points)
+    end
+    offsets = cumsum(vcat(0, cnt))
+    total_n = offsets[end]
+    n_targets = size(targets, 2)
+
+    rows = Int[]
+    cols = Int[]
+    vals = T[]
+
+    for (i, target_ids) in target_neighbor_list
+        panel_src = interface.panels[i]
+        col_range = (offsets[i] + 1):offsets[i + 1]
+
+        pot_exact = laplace3d_pot_panel_hcubature(panel_src, targets, target_ids, atol)
+
+        for (t_local, t_global) in enumerate(target_ids)
+            target = (targets[1, t_global], targets[2, t_global], targets[3, t_global])
+            for (c_local, c_global) in enumerate(col_range)
+                direct = panel_src.weights[c_local] * laplace3d_pot(panel_src.points[c_local], target)
+                v = pot_exact[t_local, c_local] - direct
+                iszero(v) && continue
+                push!(rows, t_global)
+                push!(cols, c_global)
+                push!(vals, v)
+            end
+        end
+    end
+
+    return sparse(rows, cols, vals, n_targets, total_n)
+end
+
 # direct evaluation of correction action (DT_exact - DT_direct) * sigma
 function laplace3d_DT_corrections_hcubature_apply(
     interface::DielectricInterface{P, T},
@@ -489,6 +604,28 @@ function laplace3d_DT_fmm3d_corrected_hcubature(
 
     f = charges -> (D_base * charges) + (corrections * charges)
     return LinearMap{Float64}(f, n_points, n_points)
+end
+
+function laplace3d_pottrg_fmm3d_corrected_hcubature(
+    interface::DielectricInterface{P, Float64},
+    targets::Matrix{Float64},
+    fmm_tol::Float64,
+    hcubature_atol::Float64,
+    range_factor::Float64;
+    include_edges_src::Bool = false,
+    include_edges_trg::Bool = false,
+) where {P <: AbstractPanel}
+    @assert size(targets, 1) == 3
+    _ = include_edges_trg
+
+    n_points = num_points(interface)
+    pot_base = laplace3d_pottrg_fmm3d(interface, targets, fmm_tol)
+    target_neighbor_list = build_target_neighbor_list(interface, targets, include_edges_src; range_factor = range_factor)
+    @info "length of target_neighbor_list: $(length(keys(target_neighbor_list))) out of $(length(interface.panels))"
+    corrections = laplace3d_pottrg_corrections_hcubature(interface, targets, target_neighbor_list, hcubature_atol)
+
+    f = charges -> (pot_base * charges) + (corrections * charges)
+    return LinearMap{Float64}(f, size(targets, 2), n_points)
 end
 
 function laplace3d_pottrg_near(interface::DielectricInterface{P, T}, target::NTuple{3, T}, sol::AbstractVector{T}, atol::T; range_factor::T = T(5)) where {P <: AbstractPanel, T}
