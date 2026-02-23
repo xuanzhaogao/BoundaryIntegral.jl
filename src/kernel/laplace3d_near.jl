@@ -254,44 +254,41 @@ end
 function _refine_interface_for_targets(
     interface::DielectricInterface{FlatPanel{T, 3}, T},
     targets::Matrix{T},
-    panel_size_limit::T,
-    include_edges_src::Bool;
+    panel_size_limit::T;
     range_factor::T = T(5),
-    max_depth::Int = 20,
 ) where T
     @assert size(targets, 1) == 3
-    _ = include_edges_src
 
-    if !isfinite(panel_size_limit) || panel_size_limit <= zero(T) || isempty(interface.panels)
+    if isempty(interface.panels)
         parent_ids = collect(1:length(interface.panels))
         from_split = fill(false, length(interface.panels))
         return interface, parent_ids, from_split
     end
 
     tree = KDTree(targets)
-    stack = Tuple{Int, FlatPanel{T, 3}, Int}[]
+    stack = Tuple{Int, FlatPanel{T, 3}, Bool}[]
     for i in eachindex(interface.panels)
-        push!(stack, (i, interface.panels[i], 0))
+        push!(stack, (i, interface.panels[i], false))
     end
 
     refined_panels = FlatPanel{T, 3}[]
     parent_ids = Int[]
     from_split = Bool[]
     while !isempty(stack)
-        parent_idx, panel, depth = pop!(stack)
+        parent_idx, panel, is_split = pop!(stack)
         l_panel = _panel_max_length(panel)
         c_panel = _panel_center(panel)
         r_i = range_factor * l_panel / panel.n_quad
         near_targets = inrange(tree, collect(c_panel), r_i)
 
-        if !isempty(near_targets) && l_panel > panel_size_limit && depth < max_depth
+        if !isempty(near_targets) && l_panel > panel_size_limit
             for child in _split_panel4(panel)
-                push!(stack, (parent_idx, child, depth + 1))
+                push!(stack, (parent_idx, child, true))
             end
         else
             push!(refined_panels, panel)
             push!(parent_ids, parent_idx)
-            push!(from_split, depth > 0)
+            push!(from_split, is_split)
         end
     end
 
@@ -770,24 +767,19 @@ function laplace3d_pottrg_fmm3d_corrected_hcubature(
     hcubature_atol::Float64,
     range_factor::Float64;
     include_edges_src::Bool = false,
-    include_edges_trg::Bool = false,
-    panel_size_limit::Float64 = Inf,
-    max_refine_depth::Int = 20,
 ) where {P <: AbstractPanel}
     @assert size(targets, 1) == 3
-    _ = include_edges_trg
 
     n_points = num_points(interface)
     refined_interface = interface
     prolongation = sparse(1:n_points, 1:n_points, ones(Float64, n_points), n_points, n_points)
     if P <: FlatPanel{Float64, 3}
+        panel_size_limit = minimum(_panel_max_length(panel) for panel in interface.panels)
         refined_interface, parent_ids, from_split = _refine_interface_for_targets(
             interface,
             targets,
-            panel_size_limit,
-            include_edges_src;
+            panel_size_limit;
             range_factor = range_factor,
-            max_depth = max_refine_depth,
         )
         prolongation = _refined_interface_prolongation(interface, refined_interface, parent_ids, from_split)
     end

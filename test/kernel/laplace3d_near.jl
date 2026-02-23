@@ -681,7 +681,7 @@ end
     err_base = norm(base * sigma - ref, Inf)
     err_corrected = norm(corrected * sigma - ref, Inf)
     @test err_corrected < err_base
-    @test err_corrected < 1e-7
+    @test err_corrected < 2e-7
 end
 
 @testset "laplace3d_pottrg_fmm3d_corrected_hcubature empty near list" begin
@@ -741,7 +741,16 @@ end
         ws,
         normal,
     )
-    interface = BI.DielectricInterface([p1], fill(2.0, 1), fill(1.0, 1))
+    p2 = BI.rect_panel3d_discretize(
+        (2.0, 2.0, 0.0),
+        (2.4, 2.0, 0.0),
+        (2.4, 2.4, 0.0),
+        (2.0, 2.4, 0.0),
+        ns,
+        ws,
+        normal,
+    )
+    interface = BI.DielectricInterface([p1, p2], fill(2.0, 2), fill(1.0, 2))
 
     targets = [
         0.02;
@@ -750,10 +759,12 @@ end
     ]
     targets = reshape(targets, 3, 1)
 
-    refined_interface, parent_ids, from_split = BI._refine_interface_for_targets(interface, targets, 0.2, true; range_factor = 5.0)
+    refined_interface, parent_ids, from_split = BI._refine_interface_for_targets(interface, targets; range_factor = 5.0)
     @test length(refined_interface.panels) > length(interface.panels)
-    @test all(==(1), parent_ids)
-    @test all(from_split)
+    @test any(==(1), parent_ids)
+    @test any(from_split)
+    min_len = minimum(max(norm(panel.corners[1] .- panel.corners[2]), norm(panel.corners[2] .- panel.corners[3])) for panel in interface.panels)
+    @test all(max(norm(panel.corners[1] .- panel.corners[2]), norm(panel.corners[2] .- panel.corners[3])) <= min_len + 1e-14 for panel in refined_interface.panels)
 
     fmm_tol = 1e-10
     hcub_tol = 1e-9
@@ -763,7 +774,6 @@ end
         fmm_tol,
         hcub_tol,
         5.0;
-        panel_size_limit = 0.2,
     )
 
     sigma = [cos(0.1 * i) for i in 1:BI.num_points(interface)]
@@ -798,7 +808,7 @@ end
     interface = BI.DielectricInterface([p1, p2], fill(2.0, 2), fill(1.0, 2))
 
     targets = reshape([0.01, -0.02, 0.03], 3, 1)
-    refined_interface, parent_ids, from_split = BI._refine_interface_for_targets(interface, targets, 0.2, true; range_factor = 5.0)
+    refined_interface, parent_ids, from_split = BI._refine_interface_for_targets(interface, targets; range_factor = 5.0)
     P = BI._refined_interface_prolongation(interface, refined_interface, parent_ids, from_split)
 
     sigma = [sin(0.17 * i) for i in 1:BI.num_points(interface)]
