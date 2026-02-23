@@ -18,18 +18,16 @@ end
 
 
 struct VolumeSource{T, D} <: AbstractSource
-    axes::NTuple{D, Vector{T}}
-    weights::Array{T, D}
-    density::Array{T, D}
-    origin::NTuple{D, T}
-    basis::NTuple{D, NTuple{D, T}}
+    positions::Matrix{T}
+    weights::Vector{T}
+    density::Vector{T}
 end
 
 struct VolumeSourcePointInfo{T}
     point::NTuple{3, T}
     weight::T
     density::T
-    idx::NTuple{3, Int}
+    idx::Int
     global_idx::Int
 end
 
@@ -39,40 +37,24 @@ end
 
 eachpoint(vs::VolumeSource{T, 3}) where {T} = VolumeSourceIterator{T}(vs)
 
-Base.length(it::VolumeSourceIterator{T}) where {T} = begin
-    xs, ys, zs = it.vs.axes
-    return length(xs) * length(ys) * length(zs)
-end
+Base.length(it::VolumeSourceIterator{T}) where {T} = length(it.vs.density)
 
 Base.eltype(::VolumeSourceIterator{T}) where {T} = VolumeSourcePointInfo{T}
 
-function Base.iterate(it::VolumeSourceIterator{T}, state::NTuple{4, Int} = (1, 1, 1, 1)) where {T}
-    ix, iy, iz, global_idx = state
+function Base.iterate(it::VolumeSourceIterator{T}, state::Int = 1) where {T}
+    idx = state
     vs = it.vs
-    xs, ys, zs = vs.axes
-    nx = length(xs)
-    ny = length(ys)
-    nz = length(zs)
+    idx > length(vs.density) && return nothing
 
-    ix > nx && return nothing
-
-    point = volume_source_point(vs, ix, iy, iz)
+    point = volume_source_point(vs, idx)
     info = VolumeSourcePointInfo{T}(
         point,
-        vs.weights[ix, iy, iz],
-        vs.density[ix, iy, iz],
-        (ix, iy, iz),
-        global_idx,
+        vs.weights[idx],
+        vs.density[idx],
+        idx,
+        idx,
     )
-
-    if iz < nz
-        next_state = (ix, iy, iz + 1, global_idx + 1)
-    elseif iy < ny
-        next_state = (ix, iy + 1, 1, global_idx + 1)
-    else
-        next_state = (ix + 1, 1, 1, global_idx + 1)
-    end
-
+    next_state = idx + 1
     return (info, next_state)
 end
 
@@ -95,13 +77,94 @@ function _validate_volume_source_grid(
     return nothing
 end
 
-function VolumeSource{T, 3}(axes::NTuple{3, Vector{T}}, weights::Array{T, 3}, density::Array{T, 3}) where {T}
-    _validate_volume_source_grid(axes, weights, density)
-    return VolumeSource{T, 3}(axes, weights, density, (zero(T), zero(T), zero(T)), _identity_basis(T, Val(3)))
+function _validate_volume_source_flat(
+    positions::AbstractMatrix{T},
+    weights::AbstractVector{T},
+    density::AbstractVector{T},
+) where {T}
+    size(positions, 1) == 3 || throw(ArgumentError("positions must have shape (3, n)"))
+    n = size(positions, 2)
+    n == length(weights) || throw(ArgumentError("positions and weights must have the same length"))
+    n == length(density) || throw(ArgumentError("positions and density must have the same length"))
+    return n
 end
 
-function VolumeSource(axes::NTuple{3, Vector{T}}, weights::Array{T, 3}, density::Array{T, 3}) where {T}
-    return VolumeSource{T, 3}(axes, weights, density)
+function _truncate_volume_source(
+    positions::Matrix{T},
+    weights::Vector{T},
+    density::Vector{T},
+    tol::T,
+) where {T}
+    tol < zero(T) && throw(ArgumentError("tol must be >= 0"))
+    tol == zero(T) && return positions, weights, density
+
+    keep = abs.(density) .>= tol
+    any(keep) || throw(ArgumentError("all source points are truncated by tol=$(tol)"))
+    return positions[:, keep], weights[keep], density[keep]
+end
+
+function VolumeSource(
+    positions::AbstractMatrix{T},
+    weights::AbstractVector{T},
+    density::AbstractVector{T};
+    tol::Real = 0,
+) where {T}
+    _validate_volume_source_flat(positions, weights, density)
+    pos = Matrix{T}(positions)
+    w = Vector{T}(weights)
+    rho = Vector{T}(density)
+    pos_t, w_t, rho_t = _truncate_volume_source(pos, w, rho, T(tol))
+    return VolumeSource{T, 3}(pos_t, w_t, rho_t)
+end
+
+function _volume_source_positions(
+    axes::NTuple{3, Vector{T}},
+    origin::NTuple{3, T},
+    basis::NTuple{3, NTuple{3, T}},
+) where {T}
+    xs, ys, zs = axes
+    nx, ny, nz = length(xs), length(ys), length(zs)
+    n = nx * ny * nz
+    positions = Matrix{T}(undef, 3, n)
+    idx = 0
+    o = origin
+    a, b, c = basis
+    for ix in 1:nx, iy in 1:ny, iz in 1:nz
+        idx += 1
+        u = xs[ix]
+        v = ys[iy]
+        w = zs[iz]
+        positions[1, idx] = o[1] + u * a[1] + v * b[1] + w * c[1]
+        positions[2, idx] = o[2] + u * a[2] + v * b[2] + w * c[2]
+        positions[3, idx] = o[3] + u * a[3] + v * b[3] + w * c[3]
+    end
+    return positions
+end
+
+function _flatten_volume_source_data(weights::Array{T, 3}, density::Array{T, 3}) where {T}
+    nx, ny, nz = size(weights)
+    w = Vector{T}(undef, nx * ny * nz)
+    rho = Vector{T}(undef, nx * ny * nz)
+    idx = 0
+    for ix in 1:nx, iy in 1:ny, iz in 1:nz
+        idx += 1
+        w[idx] = weights[ix, iy, iz]
+        rho[idx] = density[ix, iy, iz]
+    end
+    return w, rho
+end
+
+function VolumeSource{T, 3}(axes::NTuple{3, Vector{T}}, weights::Array{T, 3}, density::Array{T, 3}; tol::Real = 0) where {T}
+    _validate_volume_source_grid(axes, weights, density)
+    origin = (zero(T), zero(T), zero(T))
+    basis = _identity_basis(T, Val(3))
+    positions = _volume_source_positions(axes, origin, basis)
+    w, rho = _flatten_volume_source_data(weights, density)
+    return VolumeSource(positions, w, rho; tol = tol)
+end
+
+function VolumeSource(axes::NTuple{3, Vector{T}}, weights::Array{T, 3}, density::Array{T, 3}; tol::Real = 0) where {T}
+    return VolumeSource{T, 3}(axes, weights, density; tol = tol)
 end
 
 function VolumeSource(
@@ -109,22 +172,21 @@ function VolumeSource(
     weights::Array{T, 3},
     density::Array{T, 3},
     origin::NTuple{3, T},
-    basis::NTuple{3, NTuple{3, T}},
+    basis::NTuple{3, NTuple{3, T}};
+    tol::Real = 0,
 ) where {T}
     _validate_volume_source_grid(axes, weights, density)
-    return VolumeSource{T, 3}(axes, weights, density, origin, basis)
+    positions = _volume_source_positions(axes, origin, basis)
+    w, rho = _flatten_volume_source_data(weights, density)
+    return VolumeSource(positions, w, rho; tol = tol)
 end
 
-function volume_source_point(vs::VolumeSource{T, 3}, ix::Int, iy::Int, iz::Int) where {T}
-    u = vs.axes[1][ix]
-    v = vs.axes[2][iy]
-    w = vs.axes[3][iz]
-    o = vs.origin
-    a, b, c = vs.basis
+function volume_source_point(vs::VolumeSource{T, 3}, idx::Int) where {T}
+    1 <= idx <= size(vs.positions, 2) || throw(BoundsError(vs.positions, (Colon(), idx)))
     return (
-        o[1] + u * a[1] + v * b[1] + w * c[1],
-        o[2] + u * a[2] + v * b[2] + w * c[2],
-        o[3] + u * a[3] + v * b[3] + w * c[3],
+        vs.positions[1, idx],
+        vs.positions[2, idx],
+        vs.positions[3, idx],
     )
 end
 
@@ -140,35 +202,18 @@ function _is_uniform_axis(axis::AbstractVector{T}; rtol::T = sqrt(eps(T)), atol:
     return true
 end
 
-function VolumeSource(points::Vector{NTuple{3, T}}, weights::Vector{T}, density::Vector{T}) where {T}
+function VolumeSource(points::Vector{NTuple{3, T}}, weights::Vector{T}, density::Vector{T}; tol::Real = 0) where {T}
     n = length(points)
     n == length(weights) || throw(ArgumentError("points and weights must have the same length"))
     n == length(density) || throw(ArgumentError("points and density must have the same length"))
-
-    xs = sort(unique(p[1] for p in points))
-    ys = sort(unique(p[2] for p in points))
-    zs = sort(unique(p[3] for p in points))
-    nx, ny, nz = length(xs), length(ys), length(zs)
-    n == nx * ny * nz || throw(ArgumentError("points must form a full tensor grid"))
-
-    wx = Array{T, 3}(undef, nx, ny, nz)
-    dens = Array{T, 3}(undef, nx, ny, nz)
-    filled = falses(nx, ny, nz)
-
+    positions = Matrix{T}(undef, 3, n)
     for i in 1:n
         x, y, z = points[i]
-        ix = searchsortedfirst(xs, x)
-        iy = searchsortedfirst(ys, y)
-        iz = searchsortedfirst(zs, z)
-        (1 <= ix <= nx && 1 <= iy <= ny && 1 <= iz <= nz) || throw(ArgumentError("point out of grid bounds"))
-        filled[ix, iy, iz] && throw(ArgumentError("duplicate point in grid"))
-        wx[ix, iy, iz] = weights[i]
-        dens[ix, iy, iz] = density[i]
-        filled[ix, iy, iz] = true
+        positions[1, i] = x
+        positions[2, i] = y
+        positions[3, i] = z
     end
-
-    all(filled) || throw(ArgumentError("points must cover the full tensor grid"))
-    return VolumeSource((xs, ys, zs), wx, dens)
+    return VolumeSource(positions, weights, density; tol = tol)
 end
 
 function GaussianVolumeSource(center::NTuple{3, T}, σ::T, n::Int, tol::T) where T

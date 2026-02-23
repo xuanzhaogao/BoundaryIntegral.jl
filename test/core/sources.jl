@@ -17,16 +17,17 @@ using Test
     order = randperm(length(points))
     src = VolumeSource(points[order], weights[order], density[order])
 
-    @test src.axes[1] == xs
-    @test src.axes[2] == ys
-    @test src.axes[3] == zs
-    @test size(src.weights) == (2, 2, 2)
-    @test size(src.density) == (2, 2, 2)
+    @test size(src.positions) == (3, 8)
+    @test length(src.weights) == 8
+    @test length(src.density) == 8
 
     lookup_w = Dict(points[i] => weights[i] for i in 1:length(points))
     lookup_d = Dict(points[i] => density[i] for i in 1:length(points))
-    @test src.weights[1, 1, 1] == lookup_w[(xs[1], ys[1], zs[1])]
-    @test src.density[2, 2, 2] == lookup_d[(xs[2], ys[2], zs[2])]
+    for s in 1:length(src.weights)
+        pos = (src.positions[1, s], src.positions[2, s], src.positions[3, s])
+        @test src.weights[s] == lookup_w[pos]
+        @test src.density[s] == lookup_d[pos]
+    end
 end
 
 @testset "VolumeSource iterator" begin
@@ -45,36 +46,25 @@ end
     @test length(pts) == length(points)
 
     first_pt = pts[1]
-    @test first_pt.idx == (1, 1, 1)
+    @test first_pt.idx == 1
     @test first_pt.global_idx == 1
-    @test first_pt.point == BoundaryIntegral.volume_source_point(src, 1, 1, 1)
-    @test first_pt.weight == src.weights[1, 1, 1]
-    @test first_pt.density == src.density[1, 1, 1]
+    @test first_pt.point == BoundaryIntegral.volume_source_point(src, 1)
+    @test first_pt.weight == src.weights[1]
+    @test first_pt.density == src.density[1]
 
     last_pt = pts[end]
-    @test last_pt.idx == (2, 2, 2)
+    @test last_pt.idx == length(points)
     @test last_pt.global_idx == length(points)
-    @test last_pt.point == BoundaryIntegral.volume_source_point(src, 2, 2, 2)
-    @test last_pt.weight == src.weights[2, 2, 2]
-    @test last_pt.density == src.density[2, 2, 2]
-
-    # Iteration order should match ix outer, iy middle, iz inner.
-    k = 0
-    for ix in 1:length(xs), iy in 1:length(ys), iz in 1:length(zs)
-        k += 1
-        @test pts[k].idx == (ix, iy, iz)
-        @test pts[k].global_idx == k
-    end
+    @test last_pt.point == BoundaryIntegral.volume_source_point(src, length(points))
+    @test last_pt.weight == src.weights[end]
+    @test last_pt.density == src.density[end]
 end
 
 @testset "GaussianVolumeSource grid" begin
     src = BoundaryIntegral.GaussianVolumeSource((0.0, 0.0, 0.0), 1.0, 3, 1e-2)
-    @test size(src.density) == (3, 3, 3)
-    @test size(src.weights) == (3, 3, 3)
-    @test length(src.axes) == 3
-    @test issorted(src.axes[1])
-    @test issorted(src.axes[2])
-    @test issorted(src.axes[3])
+    @test length(src.density) == 27
+    @test length(src.weights) == 27
+    @test size(src.positions) == (3, 27)
 end
 
 @testset "GaussianVolumeSource auto n" begin
@@ -86,13 +76,11 @@ end
     src_lo = BoundaryIntegral.GaussianVolumeSource(center, σ, tol_lo)
     src_hi = BoundaryIntegral.GaussianVolumeSource(center, σ, tol_hi)
 
-    n_lo = size(src_lo.density, 1)
-    n_hi = size(src_hi.density, 1)
-    @test n_lo >= 1
-    @test n_hi >= n_lo
+    @test length(src_lo.density) > 0
+    @test length(src_hi.density) >= length(src_lo.density)
 
-    src_lo_manual = BoundaryIntegral.GaussianVolumeSource(center, σ, n_lo, tol_lo)
-    @test size(src_lo_manual.density) == size(src_lo.density)
+    src_lo_manual = BoundaryIntegral.GaussianVolumeSource(center, σ, 3, tol_lo)
+    @test length(src_lo_manual.density) <= 27
 end
 
 @testset "GaussianVolumeSource auto n interp error" begin
@@ -100,10 +88,9 @@ end
     σ = 1.0
     tol = 1e-3
     src = BoundaryIntegral.GaussianVolumeSource(center, σ, tol)
-    xs, ys, zs = src.axes
     two_sigma2 = 2 * σ * σ
     norm_factor = inv((sqrt(2 * pi) * σ)^3)
-    n = length(xs)
+    n = round(Int, cbrt(length(src.density)))
     ns, ws = BoundaryIntegral.gausslegendre(n)
     support_r = sqrt(two_sigma2 * log(inv(tol)))
     λ = BoundaryIntegral.gl_barycentric_weights(ns, ws)
@@ -157,14 +144,27 @@ end
 
     src = BoundaryIntegral.VolumeSource(datagrid)
 
-    @test size(src.density) == (nx, ny, nz)
-    @test src.density == values
-    @test BoundaryIntegral.volume_source_point(src, 3, 2, 1) ==
-        BoundaryIntegral.grid_point(datagrid, 3, 2, 1)
+    @test length(src.density) == nx * ny * nz
+    @test length(src.weights) == nx * ny * nz
+
+    idx = (3 - 1) * ny * nz + (2 - 1) * nz + 1
+    @test BoundaryIntegral.volume_source_point(src, idx) == BoundaryIntegral.grid_point(datagrid, 3, 2, 1)
 
     At, Bt, Ct = BoundaryIntegral.true_cell_vectors(datagrid)
     jac = abs(det(hcat(collect(At), collect(Bt), collect(Ct))))
-    @test all(isapprox.(src.weights, fill(jac / (nx * ny * nz), nx, ny, nz)))
+    @test all(isapprox.(src.weights, fill(jac / (nx * ny * nz), nx * ny * nz)))
+end
+
+@testset "VolumeSource truncates low-density points" begin
+    points = [(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0)]
+    weights = [1.0, 2.0, 3.0]
+    density = [1e-4, 0.2, -0.05]
+
+    src = BoundaryIntegral.VolumeSource(points, weights, density; tol = 0.1)
+    @test length(src.density) == 1
+    @test src.density[1] == 0.2
+    @test src.weights[1] == 2.0
+    @test src.positions[:, 1] == [1.0, 0.0, 0.0]
 end
 
 @testset "datagrid_zslice extracts z-layers by index or z-value" begin
