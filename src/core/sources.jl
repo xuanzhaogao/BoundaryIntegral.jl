@@ -25,6 +25,57 @@ struct VolumeSource{T, D} <: AbstractSource
     basis::NTuple{D, NTuple{D, T}}
 end
 
+struct VolumeSourcePointInfo{T}
+    point::NTuple{3, T}
+    weight::T
+    density::T
+    idx::NTuple{3, Int}
+    global_idx::Int
+end
+
+struct VolumeSourceIterator{T}
+    vs::VolumeSource{T, 3}
+end
+
+eachpoint(vs::VolumeSource{T, 3}) where {T} = VolumeSourceIterator{T}(vs)
+
+Base.length(it::VolumeSourceIterator{T}) where {T} = begin
+    xs, ys, zs = it.vs.axes
+    return length(xs) * length(ys) * length(zs)
+end
+
+Base.eltype(::VolumeSourceIterator{T}) where {T} = VolumeSourcePointInfo{T}
+
+function Base.iterate(it::VolumeSourceIterator{T}, state::NTuple{4, Int} = (1, 1, 1, 1)) where {T}
+    ix, iy, iz, global_idx = state
+    vs = it.vs
+    xs, ys, zs = vs.axes
+    nx = length(xs)
+    ny = length(ys)
+    nz = length(zs)
+
+    ix > nx && return nothing
+
+    point = volume_source_point(vs, ix, iy, iz)
+    info = VolumeSourcePointInfo{T}(
+        point,
+        vs.weights[ix, iy, iz],
+        vs.density[ix, iy, iz],
+        (ix, iy, iz),
+        global_idx,
+    )
+
+    if iz < nz
+        next_state = (ix, iy, iz + 1, global_idx + 1)
+    elseif iy < ny
+        next_state = (ix, iy + 1, 1, global_idx + 1)
+    else
+        next_state = (ix + 1, 1, 1, global_idx + 1)
+    end
+
+    return (info, next_state)
+end
+
 function _identity_basis(::Type{T}, ::Val{3}) where {T}
     return (
         (one(T), zero(T), zero(T)),

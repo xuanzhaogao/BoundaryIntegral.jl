@@ -29,6 +29,44 @@ using Test
     @test src.density[2, 2, 2] == lookup_d[(xs[2], ys[2], zs[2])]
 end
 
+@testset "VolumeSource iterator" begin
+    xs = [0.0, 1.0]
+    ys = [-1.0, 2.0]
+    zs = [0.5, 1.5]
+    points = NTuple{3, Float64}[]
+    for x in xs, y in ys, z in zs
+        push!(points, (x, y, z))
+    end
+    weights = collect(1.0:length(points))
+    density = collect(10.0 .+ (1:length(points)))
+    src = VolumeSource(points, weights, density)
+
+    pts = collect(BoundaryIntegral.eachpoint(src))
+    @test length(pts) == length(points)
+
+    first_pt = pts[1]
+    @test first_pt.idx == (1, 1, 1)
+    @test first_pt.global_idx == 1
+    @test first_pt.point == BoundaryIntegral.volume_source_point(src, 1, 1, 1)
+    @test first_pt.weight == src.weights[1, 1, 1]
+    @test first_pt.density == src.density[1, 1, 1]
+
+    last_pt = pts[end]
+    @test last_pt.idx == (2, 2, 2)
+    @test last_pt.global_idx == length(points)
+    @test last_pt.point == BoundaryIntegral.volume_source_point(src, 2, 2, 2)
+    @test last_pt.weight == src.weights[2, 2, 2]
+    @test last_pt.density == src.density[2, 2, 2]
+
+    # Iteration order should match ix outer, iy middle, iz inner.
+    k = 0
+    for ix in 1:length(xs), iy in 1:length(ys), iz in 1:length(zs)
+        k += 1
+        @test pts[k].idx == (ix, iy, iz)
+        @test pts[k].global_idx == k
+    end
+end
+
 @testset "GaussianVolumeSource grid" begin
     src = BoundaryIntegral.GaussianVolumeSource((0.0, 0.0, 0.0), 1.0, 3, 1e-2)
     @test size(src.density) == (3, 3, 3)
