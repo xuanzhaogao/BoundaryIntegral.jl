@@ -199,21 +199,14 @@ function rhs_panel3d_resolved(tpl::TempPanel3D{T}, rhs::Function, n_quad::Int, a
 end
 
 function _volume_source_fmm_sources(vs::VolumeSource{T, 3}) where T
-    xs_src, ys_src, zs_src = vs.axes
-    weights = vs.weights
-    density = vs.density
-    nx, ny, nz = length(xs_src), length(ys_src), length(zs_src)
-    n_sources = nx * ny * nz
+    n_sources = length(vs.density)
     sources = Matrix{T}(undef, 3, n_sources)
     charges = Vector{T}(undef, n_sources)
-    s = 0
-    for ix in 1:nx, iy in 1:ny, iz in 1:nz
-        s += 1
-        pos = volume_source_point(vs, ix, iy, iz)
-        sources[1, s] = pos[1]
-        sources[2, s] = pos[2]
-        sources[3, s] = pos[3]
-        charges[s] = weights[ix, iy, iz] * density[ix, iy, iz]
+    @inbounds for s in 1:n_sources
+        sources[1, s] = vs.positions[1, s]
+        sources[2, s] = vs.positions[2, s]
+        sources[3, s] = vs.positions[3, s]
+        charges[s] = vs.weights[s] * vs.density[s]
     end
     return sources, charges
 end

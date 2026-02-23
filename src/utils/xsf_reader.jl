@@ -139,7 +139,7 @@ function grid_point(datagrid, i::Int, j::Int, k::Int)
     )
 end
 
-function VolumeSource(datagrid; shift::NTuple{3,<:Real}=(0.0, 0.0, 0.0))
+function VolumeSource(datagrid; shift::NTuple{3,<:Real}=(0.0, 0.0, 0.0), tol::Real=0.0)
     nx, ny, nz = datagrid.nx, datagrid.ny, datagrid.nz
     T = eltype(datagrid.values)
     axes = (
@@ -158,7 +158,7 @@ function VolumeSource(datagrid; shift::NTuple{3,<:Real}=(0.0, 0.0, 0.0))
     density = copy(datagrid.values)
     shift_f = (Float64(shift[1]), Float64(shift[2]), Float64(shift[3]))
     origin = (datagrid.origin[1], datagrid.origin[2], datagrid.origin[3]) .+ shift_f
-    return VolumeSource(axes, weights, density, origin, basis)
+    return VolumeSource(axes, weights, density, origin, basis; tol = T(tol))
 end
 
 function _datagrid_affine(datagrid)
