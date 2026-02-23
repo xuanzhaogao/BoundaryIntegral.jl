@@ -224,6 +224,163 @@ function build_target_neighbor_list(
     return neighbor_list
 end
 
+function _panel_center(panel::FlatPanel{T, 3}) where T
+    return (panel.corners[1] .+ panel.corners[2] .+ panel.corners[3] .+ panel.corners[4]) ./ 4
+end
+
+function _panel_max_length(panel::FlatPanel{T, 3}) where T
+    return max(norm(panel.corners[1] .- panel.corners[2]), norm(panel.corners[2] .- panel.corners[3]))
+end
+
+function _split_panel4(panel::FlatPanel{T, 3}) where T
+    a, b, c, d = panel.corners
+    ab = (a .+ b) ./ 2
+    bc = (b .+ c) ./ 2
+    cd = (c .+ d) ./ 2
+    da = (d .+ a) ./ 2
+    cc = (a .+ b .+ c .+ d) ./ 4
+    ns = panel.gl_xs
+    ws = panel.gl_ws
+    normal = panel.normal
+    is_edge = panel.is_edge
+    return FlatPanel{T, 3}[
+        rect_panel3d_discretize(a, ab, cc, da, ns, ws, normal; is_edge = is_edge),
+        rect_panel3d_discretize(ab, b, bc, cc, ns, ws, normal; is_edge = is_edge),
+        rect_panel3d_discretize(cc, bc, c, cd, ns, ws, normal; is_edge = is_edge),
+        rect_panel3d_discretize(da, cc, cd, d, ns, ws, normal; is_edge = is_edge),
+    ]
+end
+
+function _refine_interface_for_targets(
+    interface::DielectricInterface{FlatPanel{T, 3}, T},
+    targets::Matrix{T},
+    panel_size_limit::T,
+    include_edges_src::Bool;
+    range_factor::T = T(5),
+    max_depth::Int = 20,
+) where T
+    @assert size(targets, 1) == 3
+    _ = include_edges_src
+
+    if !isfinite(panel_size_limit) || panel_size_limit <= zero(T) || isempty(interface.panels)
+        parent_ids = collect(1:length(interface.panels))
+        from_split = fill(false, length(interface.panels))
+        return interface, parent_ids, from_split
+    end
+
+    tree = KDTree(targets)
+    stack = Tuple{Int, FlatPanel{T, 3}, Int}[]
+    for i in eachindex(interface.panels)
+        push!(stack, (i, interface.panels[i], 0))
+    end
+
+    refined_panels = FlatPanel{T, 3}[]
+    parent_ids = Int[]
+    from_split = Bool[]
+    while !isempty(stack)
+        parent_idx, panel, depth = pop!(stack)
+        l_panel = _panel_max_length(panel)
+        c_panel = _panel_center(panel)
+        r_i = range_factor * l_panel / panel.n_quad
+        near_targets = inrange(tree, collect(c_panel), r_i)
+
+        if !isempty(near_targets) && l_panel > panel_size_limit && depth < max_depth
+            for child in _split_panel4(panel)
+                push!(stack, (parent_idx, child, depth + 1))
+            end
+        else
+            push!(refined_panels, panel)
+            push!(parent_ids, parent_idx)
+            push!(from_split, depth > 0)
+        end
+    end
+
+    eps_in = Vector{T}(undef, length(refined_panels))
+    eps_out = Vector{T}(undef, length(refined_panels))
+    for i in eachindex(refined_panels)
+        pid = parent_ids[i]
+        eps_in[i] = interface.eps_in[pid]
+        eps_out[i] = interface.eps_out[pid]
+    end
+
+    return DielectricInterface(refined_panels, eps_in, eps_out), parent_ids, from_split
+end
+
+function _refined_interface_prolongation(
+    coarse_interface::DielectricInterface{FlatPanel{T, 3}, T},
+    refined_interface::DielectricInterface{FlatPanel{T, 3}, T},
+    parent_ids::Vector{Int},
+    from_split::Vector{Bool},
+) where T
+    length(parent_ids) == length(refined_interface.panels) || throw(ArgumentError("parent_ids length mismatch"))
+    length(from_split) == length(refined_interface.panels) || throw(ArgumentError("from_split length mismatch"))
+
+    n_coarse = num_points(coarse_interface)
+    n_refined = num_points(refined_interface)
+
+    coarse_counts = [length(panel.points) for panel in coarse_interface.panels]
+    coarse_offsets = cumsum(vcat(0, coarse_counts))
+
+    rows = Int[]
+    cols = Int[]
+    vals = T[]
+    row_id = 0
+
+    for (ref_idx, panel_ref) in enumerate(refined_interface.panels)
+        parent_panel = coarse_interface.panels[parent_ids[ref_idx]]
+        col0 = coarse_offsets[parent_ids[ref_idx]]
+
+        if !from_split[ref_idx]
+            for k in 1:length(panel_ref.points)
+                row_id += 1
+                push!(rows, row_id)
+                push!(cols, col0 + k)
+                push!(vals, one(T))
+            end
+            continue
+        end
+
+        ns = parent_panel.gl_xs
+        ws = parent_panel.gl_ws
+        λ = gl_barycentric_weights(ns, ws)
+        n_quad = parent_panel.n_quad
+        a, b, c, d = parent_panel.corners
+        cc = (a .+ b .+ c .+ d) ./ 4
+        bma = b .- a
+        dma = d .- a
+        bb = dot(bma, bma)
+        bd = dot(bma, dma)
+        dd = dot(dma, dma)
+        det = bb * dd - bd * bd
+        inv11 = dd / det
+        inv12 = -bd / det
+        inv22 = bb / det
+
+        for p in panel_ref.points
+            row_id += 1
+            x = p .- cc
+            rhs1 = dot(bma, x)
+            rhs2 = dot(dma, x)
+            s = inv11 * rhs1 + inv12 * rhs2
+            t = inv12 * rhs1 + inv22 * rhs2
+            u = 2 * s
+            v = 2 * t
+            rx = T.(barycentric_row(ns, λ, u))
+            ry = T.(barycentric_row(ns, λ, v))
+            for ii in 1:n_quad
+                for jj in 1:n_quad
+                    col_id = col0 + (ii - 1) * n_quad + jj
+                    push!(rows, row_id)
+                    push!(cols, col_id)
+                    push!(vals, rx[ii] * ry[jj])
+                end
+            end
+        end
+    end
+
+    return sparse(rows, cols, vals, n_refined, n_coarse)
+end
+
 # neighbor list describes the pair of panels that are near each other and the order needed for evaluation
 function build_neighbor_list(
     interface::DielectricInterface{P, T},
@@ -614,17 +771,36 @@ function laplace3d_pottrg_fmm3d_corrected_hcubature(
     range_factor::Float64;
     include_edges_src::Bool = false,
     include_edges_trg::Bool = false,
+    panel_size_limit::Float64 = Inf,
+    max_refine_depth::Int = 20,
 ) where {P <: AbstractPanel}
     @assert size(targets, 1) == 3
     _ = include_edges_trg
 
     n_points = num_points(interface)
-    pot_base = laplace3d_pottrg_fmm3d(interface, targets, fmm_tol)
-    target_neighbor_list = build_target_neighbor_list(interface, targets, include_edges_src; range_factor = range_factor)
-    @info "length of target_neighbor_list: $(length(keys(target_neighbor_list))) out of $(length(interface.panels))"
-    corrections = laplace3d_pottrg_corrections_hcubature(interface, targets, target_neighbor_list, hcubature_atol)
+    refined_interface = interface
+    prolongation = sparse(1:n_points, 1:n_points, ones(Float64, n_points), n_points, n_points)
+    if P <: FlatPanel{Float64, 3}
+        refined_interface, parent_ids, from_split = _refine_interface_for_targets(
+            interface,
+            targets,
+            panel_size_limit,
+            include_edges_src;
+            range_factor = range_factor,
+            max_depth = max_refine_depth,
+        )
+        prolongation = _refined_interface_prolongation(interface, refined_interface, parent_ids, from_split)
+    end
 
-    f = charges -> (pot_base * charges) + (corrections * charges)
+    pot_base = laplace3d_pottrg_fmm3d(refined_interface, targets, fmm_tol)
+    target_neighbor_list = build_target_neighbor_list(refined_interface, targets, include_edges_src; range_factor = range_factor)
+    @info "num of sources: $(num_points(interface)) → $(num_points(refined_interface)), length of target_neighbor_list: $(length(keys(target_neighbor_list))) out of $(length(refined_interface.panels))"
+    corrections = laplace3d_pottrg_corrections_hcubature(refined_interface, targets, target_neighbor_list, hcubature_atol)
+
+    f = charges -> begin
+        charges_refined = prolongation * charges
+        return (pot_base * charges_refined) + (corrections * charges_refined)
+    end
     return LinearMap{Float64}(f, size(targets, 2), n_points)
 end
 

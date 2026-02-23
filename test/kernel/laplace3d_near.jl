@@ -725,3 +725,97 @@ end
     sigma = [sin(0.3 * i) for i in 1:BI.num_points(interface)]
     @test norm(corrected * sigma - base * sigma, Inf) < 1e-12
 end
+
+@testset "laplace3d pottrg target-driven panel refinement" begin
+    ns, ws = gausslegendre(2)
+    ns = Float64.(ns)
+    ws = Float64.(ws)
+
+    normal = (0.0, 0.0, 1.0)
+    p1 = BI.rect_panel3d_discretize(
+        (-0.5, -0.5, 0.0),
+        (0.5, -0.5, 0.0),
+        (0.5, 0.5, 0.0),
+        (-0.5, 0.5, 0.0),
+        ns,
+        ws,
+        normal,
+    )
+    interface = BI.DielectricInterface([p1], fill(2.0, 1), fill(1.0, 1))
+
+    targets = [
+        0.02;
+        -0.01;
+        0.03
+    ]
+    targets = reshape(targets, 3, 1)
+
+    refined_interface, parent_ids, from_split = BI._refine_interface_for_targets(interface, targets, 0.2, true; range_factor = 5.0)
+    @test length(refined_interface.panels) > length(interface.panels)
+    @test all(==(1), parent_ids)
+    @test all(from_split)
+
+    fmm_tol = 1e-10
+    hcub_tol = 1e-9
+    corrected = BI.laplace3d_pottrg_fmm3d_corrected_hcubature(
+        interface,
+        targets,
+        fmm_tol,
+        hcub_tol,
+        5.0;
+        panel_size_limit = 0.2,
+    )
+
+    sigma = [cos(0.1 * i) for i in 1:BI.num_points(interface)]
+    vals = corrected * sigma
+    @test isfinite(vals[1])
+end
+
+@testset "laplace3d prolongation reuses unchanged panels" begin
+    ns, ws = gausslegendre(2)
+    ns = Float64.(ns)
+    ws = Float64.(ws)
+    normal = (0.0, 0.0, 1.0)
+
+    p1 = BI.rect_panel3d_discretize(
+        (-0.5, -0.5, 0.0),
+        (0.5, -0.5, 0.0),
+        (0.5, 0.5, 0.0),
+        (-0.5, 0.5, 0.0),
+        ns,
+        ws,
+        normal,
+    )
+    p2 = BI.rect_panel3d_discretize(
+        (5.0, 5.0, 0.0),
+        (6.0, 5.0, 0.0),
+        (6.0, 6.0, 0.0),
+        (5.0, 6.0, 0.0),
+        ns,
+        ws,
+        normal,
+    )
+    interface = BI.DielectricInterface([p1, p2], fill(2.0, 2), fill(1.0, 2))
+
+    targets = reshape([0.01, -0.02, 0.03], 3, 1)
+    refined_interface, parent_ids, from_split = BI._refine_interface_for_targets(interface, targets, 0.2, true; range_factor = 5.0)
+    P = BI._refined_interface_prolongation(interface, refined_interface, parent_ids, from_split)
+
+    sigma = [sin(0.17 * i) for i in 1:BI.num_points(interface)]
+    sigma_ref = P * sigma
+
+    coarse_counts = [length(panel.points) for panel in interface.panels]
+    coarse_offsets = cumsum(vcat(0, coarse_counts))
+    refined_counts = [length(panel.points) for panel in refined_interface.panels]
+    refined_offsets = cumsum(vcat(0, refined_counts))
+
+    for i in eachindex(refined_interface.panels)
+        from_split[i] && continue
+        pid = parent_ids[i]
+        r0 = refined_offsets[i] + 1
+        r1 = refined_offsets[i + 1]
+        c0 = coarse_offsets[pid] + 1
+        c1 = coarse_offsets[pid + 1]
+        @test sigma_ref[r0:r1] == sigma[c0:c1]
+    end
+end
