@@ -139,9 +139,9 @@ function grid_point(datagrid, i::Int, j::Int, k::Int)
     )
 end
 
-function VolumeSource(datagrid; shift::NTuple{3,Float64}=(0,0,0))
+function VolumeSource(datagrid; shift::NTuple{3,<:Real}=(0.0, 0.0, 0.0))
     nx, ny, nz = datagrid.nx, datagrid.ny, datagrid.nz
-    T = Float64
+    T = eltype(datagrid.values)
     axes = (
         collect(T((i - 1) / nx) for i in 1:nx),
         collect(T((j - 1) / ny) for j in 1:ny),
@@ -156,6 +156,163 @@ function VolumeSource(datagrid; shift::NTuple{3,Float64}=(0,0,0))
     jac = abs(det(hcat(collect(At), collect(Bt), collect(Ct))))
     weights = fill(jac / (nx * ny * nz), nx, ny, nz)
     density = copy(datagrid.values)
-    origin = (datagrid.origin[1], datagrid.origin[2], datagrid.origin[3]) .+ shift
+    shift_f = (Float64(shift[1]), Float64(shift[2]), Float64(shift[3]))
+    origin = (datagrid.origin[1], datagrid.origin[2], datagrid.origin[3]) .+ shift_f
     return VolumeSource(axes, weights, density, origin, basis)
+end
+
+function _datagrid_affine(datagrid)
+    o = datagrid.origin
+    At, Bt, Ct = true_cell_vectors(datagrid)
+    M = hcat(collect(At), collect(Bt), collect(Ct))
+    Minv = inv(M)
+    u_max = (datagrid.nx - 1) / datagrid.nx
+    v_max = (datagrid.ny - 1) / datagrid.ny
+    w_max = (datagrid.nz - 1) / datagrid.nz
+    return o, M, Minv, u_max, v_max, w_max
+end
+
+function _is_axis_aligned_datagrid(datagrid)
+    At, Bt, Ct = true_cell_vectors(datagrid)
+    tol = 1e-12
+    return abs(At[2]) <= tol && abs(At[3]) <= tol &&
+        abs(Bt[1]) <= tol && abs(Bt[3]) <= tol &&
+        abs(Ct[1]) <= tol && abs(Ct[2]) <= tol
+end
+
+function _is_inside_datagrid(Minv::AbstractMatrix, p::NTuple{3, <:Real}, datagrid; tol = 1e-10)
+    o = datagrid.origin
+    uvw = Minv * [p[1] - o[1], p[2] - o[2], p[3] - o[3]]
+    u, v, w = uvw
+    u_max = (datagrid.nx - 1) / datagrid.nx
+    v_max = (datagrid.ny - 1) / datagrid.ny
+    w_max = (datagrid.nz - 1) / datagrid.nz
+    return -tol <= u <= u_max + tol &&
+        -tol <= v <= v_max + tol &&
+        -tol <= w <= w_max + tol
+end
+
+function _datagrid_trilinear_value(datagrid, Minv::AbstractMatrix, p::NTuple{3, <:Real}; tol = 1e-10)
+    nx, ny, nz = datagrid.nx, datagrid.ny, datagrid.nz
+    o = datagrid.origin
+    duvw = Minv * [p[1] - o[1], p[2] - o[2], p[3] - o[3]]
+    u, v, w = duvw
+    u_min, v_min, w_min = 0.0, 0.0, 0.0
+    u_max = (nx - 1) / nx
+    v_max = (ny - 1) / ny
+    w_max = (nz - 1) / nz
+    if u < u_min - tol || u > u_max + tol || v < v_min - tol || v > v_max + tol || w < w_min - tol || w > w_max + tol
+        return NaN
+    end
+
+    uf = clamp(u, u_min, u_max)
+    vf = clamp(v, v_min, v_max)
+    wf = clamp(w, w_min, w_max)
+    sx = uf * nx + 1
+    sy = vf * ny + 1
+    sz = wf * nz + 1
+
+    ix0 = clamp(floor(Int, sx), 1, nx - 1)
+    iy0 = clamp(floor(Int, sy), 1, ny - 1)
+    iz0 = clamp(floor(Int, sz), 1, nz - 1)
+    ix1 = ix0 + 1
+    iy1 = iy0 + 1
+    iz1 = iz0 + 1
+
+    tx = clamp(sx - ix0, 0.0, 1.0)
+    ty = clamp(sy - iy0, 0.0, 1.0)
+    tz = clamp(sz - iz0, 0.0, 1.0)
+
+    vals = datagrid.values
+    v000 = vals[ix0, iy0, iz0]
+    v100 = vals[ix1, iy0, iz0]
+    v010 = vals[ix0, iy1, iz0]
+    v110 = vals[ix1, iy1, iz0]
+    v001 = vals[ix0, iy0, iz1]
+    v101 = vals[ix1, iy0, iz1]
+    v011 = vals[ix0, iy1, iz1]
+    v111 = vals[ix1, iy1, iz1]
+
+    c00 = v000 * (1 - tx) + v100 * tx
+    c10 = v010 * (1 - tx) + v110 * tx
+    c01 = v001 * (1 - tx) + v101 * tx
+    c11 = v011 * (1 - tx) + v111 * tx
+    c0 = c00 * (1 - ty) + c10 * ty
+    c1 = c01 * (1 - ty) + c11 * ty
+    return c0 * (1 - tz) + c1 * tz
+end
+
+function datagrid_zslice(
+    datagrid;
+    iz::Union{Nothing, Int} = nothing,
+    z::Union{Nothing, Real} = nothing,
+    nx_sample::Union{Nothing, Int} = nothing,
+    ny_sample::Union{Nothing, Int} = nothing,
+    interpolation::Symbol = :trilinear,
+    log_density::Bool = false,
+    log_floor::Real = 1e-16,
+)
+    isnothing(iz) || isnothing(z) || throw(ArgumentError("Specify only one of iz or z"))
+    interpolation in (:trilinear, :index) || throw(ArgumentError("interpolation must be :trilinear or :index"))
+    nx, ny, nz = datagrid.nx, datagrid.ny, datagrid.nz
+    k = if !isnothing(iz)
+        1 <= iz <= nz || throw(ArgumentError("iz must be between 1 and $nz"))
+        iz
+    elseif !isnothing(z)
+        zf = float(z)
+        zs = [grid_point(datagrid, 1, 1, kk)[3] for kk in 1:nz]
+        argmin(abs.(zs .- zf))
+    else
+        cld(nz, 2)
+    end
+
+    if isnothing(z)
+        xs = [grid_point(datagrid, i, 1, k)[1] for i in 1:nx]
+        ys = [grid_point(datagrid, 1, j, k)[2] for j in 1:ny]
+        vals = datagrid.values[:, :, k]
+        vals_f = log_density ? log10.(abs.(float.(vals)) .+ float(log_floor)) : float.(vals)
+        z_level = grid_point(datagrid, 1, 1, k)[3]
+        return (x = xs, y = ys, values = vals_f, iz = k, z = z_level)
+    end
+
+    # For axis-aligned grids, z=const matches a single k-layer exactly.
+    if interpolation == :index || _is_axis_aligned_datagrid(datagrid)
+        xs = [grid_point(datagrid, i, 1, k)[1] for i in 1:nx]
+        ys = [grid_point(datagrid, 1, j, k)[2] for j in 1:ny]
+        vals = datagrid.values[:, :, k]
+        vals_f = log_density ? log10.(abs.(float.(vals)) .+ float(log_floor)) : float.(vals)
+        z_level = isnothing(z) ? grid_point(datagrid, 1, 1, k)[3] : float(z)
+        return (x = xs, y = ys, values = vals_f, iz = k, z = z_level)
+    end
+
+    nxs = isnothing(nx_sample) ? nx : nx_sample
+    nys = isnothing(ny_sample) ? ny : ny_sample
+    nxs >= 2 || throw(ArgumentError("nx_sample must be >= 2"))
+    nys >= 2 || throw(ArgumentError("ny_sample must be >= 2"))
+
+    o, M, Minv, u_max, v_max, w_max = _datagrid_affine(datagrid)
+    corners = NTuple{3, Float64}[]
+    for u in (0.0, u_max), v in (0.0, v_max), w in (0.0, w_max)
+        p = M * [u, v, w]
+        push!(corners, (o[1] + p[1], o[2] + p[2], o[3] + p[3]))
+    end
+    xmin = minimum(c[1] for c in corners)
+    xmax = maximum(c[1] for c in corners)
+    ymin = minimum(c[2] for c in corners)
+    ymax = maximum(c[2] for c in corners)
+
+    xs = collect(LinRange(xmin, xmax, nxs))
+    ys = collect(LinRange(ymin, ymax, nys))
+    z0 = float(z)
+    vals = Matrix{Float64}(undef, nxs, nys)
+    for i in 1:nxs, j in 1:nys
+        p = (xs[i], ys[j], z0)
+        if _is_inside_datagrid(Minv, p, datagrid)
+            vals[i, j] = _datagrid_trilinear_value(datagrid, Minv, p)
+        else
+            vals[i, j] = NaN
+        end
+    end
+    vals_f = log_density ? log10.(abs.(vals) .+ float(log_floor)) : vals
+    return (x = xs, y = ys, values = vals_f, iz = k, z = z0)
 end
