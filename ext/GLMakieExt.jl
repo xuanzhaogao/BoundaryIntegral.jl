@@ -338,26 +338,8 @@ function viz_3d(
     return fig
 end
 
-function _is_identity_affine(source::VolumeSource{T, 3}) where {T}
-    tol = sqrt(eps(float(T)))
-    o = source.origin
-    b = source.basis
-    return isapprox(o[1], zero(T); atol = tol, rtol = tol) &&
-        isapprox(o[2], zero(T); atol = tol, rtol = tol) &&
-        isapprox(o[3], zero(T); atol = tol, rtol = tol) &&
-        isapprox(b[1][1], one(T); atol = tol, rtol = tol) &&
-        isapprox(b[1][2], zero(T); atol = tol, rtol = tol) &&
-        isapprox(b[1][3], zero(T); atol = tol, rtol = tol) &&
-        isapprox(b[2][1], zero(T); atol = tol, rtol = tol) &&
-        isapprox(b[2][2], one(T); atol = tol, rtol = tol) &&
-        isapprox(b[2][3], zero(T); atol = tol, rtol = tol) &&
-        isapprox(b[3][1], zero(T); atol = tol, rtol = tol) &&
-        isapprox(b[3][2], zero(T); atol = tol, rtol = tol) &&
-        isapprox(b[3][3], one(T); atol = tol, rtol = tol)
-end
-
 function _source_color_values(
-    dens::AbstractArray{T, 3},
+    dens::AbstractVector{T},
     log_density::Bool,
     log_floor::Real,
 ) where {T}
@@ -379,51 +361,24 @@ function _viz_3d_source_plot!(
     log_floor::Real = 1e-16,
     max_points::Int = 120_000,
 ) where {T}
-    xs, ys, zs = source.axes
     dens = source.density
     dens_vals = _source_color_values(dens, log_density, log_floor)
-
-    if _is_identity_affine(source)
-        if !(BoundaryIntegral._is_uniform_axis(xs) && BoundaryIntegral._is_uniform_axis(ys) && BoundaryIntegral._is_uniform_axis(zs))
-            (xs, ys, zs), dens_vals = _resample_volume_to_uniform((xs, ys, zs), dens_vals)
-        end
-
-        colormap = log_density ? :viridis : begin
-            cm = to_colormap(:plasma)
-            cm[1] = RGBAf(0, 0, 0, 0)
-            cm
-        end
-
-        return volume!(
-            ax,
-            (first(xs), last(xs)),
-            (first(ys), last(ys)),
-            (first(zs), last(zs)),
-            dens_vals;
-            colormap = colormap,
-            colorrange = colorrange,
-            # algorithm = algorithm,
-            # absorption=4f0
-        )
-    end
-
-    nx, ny, nz = size(dens)
-    n_total = nx * ny * nz
-    stride = max(1, ceil(Int, (n_total / max_points)^(1 / 3)))
+    n_total = length(dens)
+    stride = max(1, ceil(Int, n_total / max_points))
     min_abs = float(min_density)
 
     px = Float32[]
     py = Float32[]
     pz = Float32[]
     cv = Float32[]
-    for i in 1:stride:nx, j in 1:stride:ny, k in 1:stride:nz
-        v_raw = dens[i, j, k]
+    for s in 1:stride:n_total
+        v_raw = dens[s]
         abs(v_raw) < min_abs && continue
-        p = BoundaryIntegral.volume_source_point(source, i, j, k)
+        p = source.positions[:, s]
         push!(px, Float32(p[1]))
         push!(py, Float32(p[2]))
         push!(pz, Float32(p[3]))
-        push!(cv, Float32(dens_vals[i, j, k]))
+        push!(cv, Float32(dens_vals[s]))
     end
     isempty(cv) && throw(ArgumentError("No points to plot. Decrease min_density or increase max_points."))
     lo = minimum(cv)
@@ -598,26 +553,35 @@ function _surface_boundary_points(
     max_points::Int = 120_000,
 ) where {T}
     dens = source.density
-    nx, ny, nz = size(dens)
-    n_surface = max(0, 2 * (nx * ny + ny * nz + nz * nx) - 4 * (nx + ny + nz) + 8)
-    stride = max(1, ceil(Int, cbrt(max(1, n_surface / max_points))))
+    n_total = length(dens)
+    stride = max(1, ceil(Int, n_total / max_points))
     min_abs = float(min_density)
+    pos = source.positions
+    xmin, xmax = extrema(pos[1, :])
+    ymin, ymax = extrema(pos[2, :])
+    zmin, zmax = extrema(pos[3, :])
+    scale = max(float(xmax - xmin), float(ymax - ymin), float(zmax - zmin), 1.0)
+    tol = sqrt(eps(Float64)) * scale
 
     px = Float32[]
     py = Float32[]
     pz = Float32[]
     cv = Float32[]
 
-    for i in 1:stride:nx, j in 1:stride:ny, k in 1:stride:nz
-        on_surface = (i == 1 || i == nx || j == 1 || j == ny || k == 1 || k == nz)
+    for s in 1:stride:n_total
+        x = pos[1, s]
+        y = pos[2, s]
+        z = pos[3, s]
+        on_surface = (abs(x - xmin) <= tol || abs(x - xmax) <= tol ||
+                      abs(y - ymin) <= tol || abs(y - ymax) <= tol ||
+                      abs(z - zmin) <= tol || abs(z - zmax) <= tol)
         on_surface || continue
-        v_raw = dens[i, j, k]
+        v_raw = dens[s]
         abs(v_raw) < min_abs && continue
-        p = BoundaryIntegral.volume_source_point(source, i, j, k)
         v = log_density ? log10(abs(float(v_raw)) + float(log_floor)) : float(v_raw)
-        push!(px, Float32(p[1]))
-        push!(py, Float32(p[2]))
-        push!(pz, Float32(p[3]))
+        push!(px, Float32(x))
+        push!(py, Float32(y))
+        push!(pz, Float32(z))
         push!(cv, Float32(v))
     end
     isempty(cv) && throw(ArgumentError("No surface points to plot. Decrease min_density or increase max_points."))
