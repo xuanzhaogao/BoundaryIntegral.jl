@@ -3,6 +3,7 @@ using LinearAlgebra
 using Test
 
 @testset "BoundaryIntegral.jl" begin
+    run_full = get(ENV, "BI_RUN_FULL_TESTS", "0") == "1"
 
 
     # utilities
@@ -18,12 +19,17 @@ using Test
     # kernel functions
     include("kernel/laplace2d.jl")
     include("kernel/laplace3d.jl")
-    include("kernel/laplace3d_near.jl")
+    include("kernel/laplace3d_near_smoke.jl")
 
     # shape functions
-    include("shape/box3d.jl")
+    if run_full
+        include("kernel/laplace3d_near.jl")
+        include("shape/box3d.jl")
+    end
 
     # solver functions
-    include("solver/dielectric_box2d.jl")
-    include("solver/dielectric_box3d.jl")
+    if run_full
+        include("solver/dielectric_box2d.jl")
+        include("solver/dielectric_box3d.jl")
+    end
 end

@@ -141,7 +141,7 @@ end
 
 function VolumeSource(datagrid; shift::NTuple{3,<:Real}=(0.0, 0.0, 0.0))
     nx, ny, nz = datagrid.nx, datagrid.ny, datagrid.nz
-    T = Float64
+    T = eltype(datagrid.values)
     axes = (
         collect(T((i - 1) / nx) for i in 1:nx),
         collect(T((j - 1) / ny) for j in 1:ny),
