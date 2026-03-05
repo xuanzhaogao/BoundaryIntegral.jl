@@ -1,73 +1,8 @@
 using BoundaryIntegral
 import BoundaryIntegral as BI
+using LinearAlgebra
 using Random
 using Test
-
-# @testset "box3d rhs adaptive" begin
-#     rhs_const(p, n) = 1.0
-#     interface = BI.single_dielectric_box3d_rhs_adaptive(
-#         1.0,
-#         1.0,
-#         1.0,
-#         2,
-#         rhs_const,
-#         2.0,
-#         1e-8,
-#         2.0,
-#         1.0,
-#         Float64;
-#         max_depth = 3,
-#     )
-#     @test length(interface.panels) == 6
-
-#     ps = BI.PointSource((0.1, 0.1, 0.1), 1.0)
-#     interface_ps = BI.single_dielectric_box3d_rhs_adaptive(
-#         1.0,
-#         1.0,
-#         1.0,
-#         2,
-#         ps,
-#         1.0,
-#         2.0,
-#         1e-8,
-#         2.0,
-#         1.0,
-#         Float64;
-#         max_depth = 2,
-#     )
-#     @test length(interface_ps.panels) >= 6
-
-#     rhs_poly(p, n) = p[1]^4 + p[2]^4 + p[3]^4
-#     interface_refined = BI.single_dielectric_box3d_rhs_adaptive(
-#         1.0,
-#         1.0,
-#         1.0,
-#         2,
-#         rhs_poly,
-#         0.3,
-#         1e-8,
-#         2.0,
-#         1.0,
-#         Float64;
-#         max_depth = 2,
-#     )
-#     @test length(interface_refined.panels) > 6
-
-#     interface_refined_ec = BI.single_dielectric_box3d_rhs_adaptive(
-#         1.0,
-#         1.0,
-#         1.0,
-#         2,
-#         rhs_const,
-#         0.2,
-#         1e-8,
-#         2.0,
-#         1.0,
-#         Float64;
-#         max_depth = 1,
-#     )
-#     @test length(interface_refined_ec.panels) > 6
-# end
 
 @testset "box3d rhs adaptive accuracy" begin
     rng = MersenneTwister(1234)
@@ -155,7 +90,7 @@ end
     ns, ws = BI.gausslegendre(n_quad)
 
     resolved_direct = BI.rhs_panel3d_resolved(tpl, rhs_volume, n_quad, rhs_atol)
-    resolved_fmm = BI._rhs_panel3d_resolved_volume_fmm([tpl], vs, eps_src, ns, ws, rhs_atol, rhs_atol * 0.1)[1]
+    resolved_fmm = BI._rhs_panel3d_resolved_volume_fmm([tpl], vs, eps_src, ns, ws, rhs_atol, rhs_atol * 0.1, 64)[1]
 
     @test resolved_fmm || !resolved_direct
 end
@@ -281,4 +216,127 @@ end
         end
         @test max_err <= rhs_atol
     end
+end
+
+@testset "hybrid FMM+FBC rhs evaluation" begin
+    # Volume source near the z=+0.5 face triggers near-field FBC path
+    center = (0.0, 0.0, 0.45)
+    σ = 0.05
+    vs = BI.GaussianVolumeSource(center, σ, 8, 1e-6)
+    eps_src = 2.0
+
+    interface = BI.single_dielectric_box3d_rhs_adaptive(
+        1.0, 1.0, 1.0, 4, vs, eps_src, 0.3, 1e-4, 4.0, 1.0, Float64;
+        max_depth = 3, fbc_N = 64,
+    )
+
+    @test BI.num_points(interface) > 0
+    @test length(interface.panels) > 0
+
+    # Verify helper functions work
+    h = BI._estimate_source_spacing(vs)
+    @test h > 0.0
+
+    panels_init = BI._box3d_rhs_adaptive_initial_panels(1.0, 1.0, 1.0, sqrt(2.0))
+    is_near = BI._classify_near_far_panels(panels_init, vs, h)
+    @test any(is_near)   # source is near z=+0.5 face
+    @test !all(is_near)  # source is far from z=-0.5 face
+end
+
+@testset "hybrid rhs sparse-source near/far fallback" begin
+    # Single-source VolumeSource should still produce a positive near-field radius.
+    vs_sparse = BI.VolumeSource([(0.0, 0.0, 0.45)], [1e-3], [1.0])
+    h = BI._estimate_source_spacing(vs_sparse)
+    @test h > 0.0
+
+    panels_init = BI._box3d_rhs_adaptive_initial_panels(1.0, 1.0, 1.0, sqrt(2.0))
+    is_near = BI._classify_near_far_panels(panels_init, vs_sparse, h)
+    @test any(is_near)
+    @test !all(is_near)
+end
+
+@testset "hybrid rhs backend scaling consistency" begin
+    center = (0.0, 0.0, 0.05)
+    σ = 0.08
+    eps_src = 2.0
+    vs = BI.GaussianVolumeSource(center, σ, 16, 1e-9)
+    sources, charges = BI._volume_source_fmm_sources(vs)
+
+    xs = collect(range(-0.2, 0.2; length = 7))
+    nt = length(xs)^2
+    targets = Matrix{Float64}(undef, 3, nt)
+    normals = Matrix{Float64}(undef, 3, nt)
+    idx = 1
+    for x in xs, y in xs
+        targets[:, idx] .= (x, y, 0.0)
+        normals[:, idx] .= (0.0, 0.0, 1.0)
+        idx += 1
+    end
+
+    rhs_far, _, _ = BI._rhs_volume_targets_hybrid(
+        sources, charges, targets, normals, eps_src, 1e-9, 128, fill(false, nt),
+    )
+    rhs_near, _, _ = BI._rhs_volume_targets_hybrid(
+        sources, charges, targets, normals, eps_src, 1e-9, 128, fill(true, nt),
+    )
+
+    mean_abs_far = sum(abs.(rhs_far)) / nt
+    mean_abs_near = sum(abs.(rhs_near)) / nt
+    ratio = mean_abs_near / max(mean_abs_far, eps(Float64))
+    rel_diff = norm(rhs_near .- rhs_far) / max(norm(rhs_far), eps(Float64))
+    @test 0.7 <= ratio <= 1.3
+    @test rel_diff <= 0.2
+end
+
+@testset "hybrid rhs convergence on gaussian-crossing plane" begin
+    center = (0.0, 0.0, 0.05)
+    σ = 0.1
+    eps_src = 2.0
+    vs = BI.GaussianVolumeSource(center, σ, 20, 1e-9)
+    sources, charges = BI._volume_source_fmm_sources(vs)
+
+    xs = collect(range(-1.1, 1.1; length = 9))
+    nt = length(xs)^2
+    targets = Matrix{Float64}(undef, 3, nt)
+    normals = Matrix{Float64}(undef, 3, nt)
+    points = Vector{NTuple{3, Float64}}(undef, nt)
+    idx = 1
+    for x in xs, y in xs
+        p = (x, y, 0.0)
+        targets[:, idx] .= p
+        normals[:, idx] .= (0.0, 0.0, 1.0)
+        points[idx] = p
+        idx += 1
+    end
+
+    # Direct quadrature reference for the same discrete Gaussian source:
+    # this isolates hybrid-evaluation error from source discretization error.
+    rhs_ref = Vector{Float64}(undef, nt)
+    for i in 1:nt
+        acc = 0.0
+        p = points[i]
+        for s in eachindex(vs.density)
+            src = (vs.positions[1, s], vs.positions[2, s], vs.positions[3, s])
+            acc += vs.weights[s] * vs.density[s] * BI.laplace3d_grad(src, p, (0.0, 0.0, 1.0))
+        end
+        rhs_ref[i] = acc / eps_src
+    end
+
+    h = BI._estimate_source_spacing(vs)
+    is_near = BI._classify_near_far_targets(targets, vs, h)
+    @test any(is_near)
+    @test !all(is_near)
+
+    rel_errors = Float64[]
+    for fbc_N in (32, 64, 96, 128)
+        rhs, _, _ = BI._rhs_volume_targets_hybrid(
+            sources, charges, targets, normals, eps_src, 1e-9, fbc_N, is_near,
+        )
+        rel = norm(rhs .- rhs_ref) / max(norm(rhs_ref), eps(Float64))
+        push!(rel_errors, rel)
+    end
+
+    @test minimum(rel_errors[2:end]) < rel_errors[1]
+    @test minimum(rel_errors) <= 0.12
+    @test rel_errors[end] <= 0.12
 end

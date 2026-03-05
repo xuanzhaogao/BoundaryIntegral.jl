@@ -144,3 +144,27 @@ end
     rhs_fmm = BI.Rhs_dielectric_box3d_fmm3d(interface, vs, eps_src, 1e-8)
     @test norm(rhs_fmm - rhs_direct) / norm(rhs_direct) < 1e-6
 end
+
+@testset "dielectric_box3d rhs volume source hybrid near/far" begin
+    eps_box = 4.0
+    eps_src = 1.0
+    interface = BI.single_dielectric_box3d(1.0, 1.0, 1.0, 4, 0.2, eps_box, 1.0, Float64; alpha = sqrt(2))
+    vs = BI.GaussianVolumeSource((0.0, 0.0, 0.6), 0.1, 40, 1e-8)
+
+    n_points = BI.num_points(interface)
+    targets = Matrix{Float64}(undef, 3, n_points)
+    for (i, point) in enumerate(BI.eachpoint(interface))
+        targets[:, i] .= point.panel_point.point
+    end
+    h = BI._estimate_source_spacing(vs)
+    is_near = BI._classify_near_far_targets(targets, vs, h)
+    @test any(is_near)
+    @test !all(is_near)
+
+    rhs_hybrid = BI.Rhs_dielectric_box3d_hybrid(interface, vs, eps_src, 1e-8; fbc_N = 128)
+
+    # use the analytical results for Gaussian to validate the rhs
+    rhs_exact = BI.Rhs_dielectric_box3d_gaussian(interface, (0.0, 0.0, 0.6), 0.1, 1.0)
+
+    @test norm(rhs_hybrid - rhs_exact) / norm(rhs_exact) < 1e-8
+end

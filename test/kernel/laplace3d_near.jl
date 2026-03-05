@@ -759,7 +759,8 @@ end
     ]
     targets = reshape(targets, 3, 1)
 
-    refined_interface, parent_ids, from_split = BI._refine_interface_for_targets(interface, targets; range_factor = 5.0)
+    panel_size_limit = minimum(BI._panel_max_length(panel) for panel in interface.panels)
+    refined_interface, parent_ids, from_split = BI._refine_interface_for_targets(interface, targets, panel_size_limit; range_factor = 5.0)
     @test length(refined_interface.panels) > length(interface.panels)
     @test any(==(1), parent_ids)
     @test any(from_split)
@@ -808,7 +809,8 @@ end
     interface = BI.DielectricInterface([p1, p2], fill(2.0, 2), fill(1.0, 2))
 
     targets = reshape([0.01, -0.02, 0.03], 3, 1)
-    refined_interface, parent_ids, from_split = BI._refine_interface_for_targets(interface, targets; range_factor = 5.0)
+    panel_size_limit = minimum(BI._panel_max_length(panel) for panel in interface.panels)
+    refined_interface, parent_ids, from_split = BI._refine_interface_for_targets(interface, targets, panel_size_limit; range_factor = 5.0)
     P = BI._refined_interface_prolongation(interface, refined_interface, parent_ids, from_split)
 
     sigma = [sin(0.17 * i) for i in 1:BI.num_points(interface)]

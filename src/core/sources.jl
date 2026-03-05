@@ -221,25 +221,26 @@ function GaussianVolumeSource(center::NTuple{3, T}, σ::T, n::Int, tol::T) where
     @assert σ > zero(T) "σ must be > 0"
     @assert tol > zero(T) && tol < one(T) "tol must be in (0, 1)"
 
-    ns, ws = gausslegendre(n)
     two_sigma2 = T(2) * σ * σ
     support_r = sqrt(two_sigma2 * log(inv(tol)))
     norm_factor = inv((sqrt(T(2) * T(pi)) * σ)^3)
-    xs = [center[1] + support_r * T(ns[i]) for i in 1:n]
-    ys = [center[2] + support_r * T(ns[i]) for i in 1:n]
-    zs = [center[3] + support_r * T(ns[i]) for i in 1:n]
+    h = T(2) * support_r / T(n)
+    offset0 = -support_r + h / T(2)
+    xs = [center[1] + offset0 + (i - 1) * h for i in 1:n]
+    ys = [center[2] + offset0 + (i - 1) * h for i in 1:n]
+    zs = [center[3] + offset0 + (i - 1) * h for i in 1:n]
     weights = Array{T, 3}(undef, n, n, n)
     density = Array{T, 3}(undef, n, n, n)
 
     for i in 1:n
         xi = xs[i]
-        wi = support_r * T(ws[i])
+        wi = h
         for j in 1:n
             yj = ys[j]
-            wj = support_r * T(ws[j])
+            wj = h
             for k in 1:n
                 zk = zs[k]
-                wk = support_r * T(ws[k])
+                wk = h
                 weights[i, j, k] = wi * wj * wk
                 r2 = (xi - center[1])^2 + (yj - center[2])^2 + (zk - center[3])^2
                 density[i, j, k] = norm_factor * exp(-r2 / two_sigma2)
@@ -248,55 +249,4 @@ function GaussianVolumeSource(center::NTuple{3, T}, σ::T, n::Int, tol::T) where
     end
 
     return VolumeSource((xs, ys, zs), weights, density)
-end
-
-function _gaussian_quad_order(σ::T, tol::T; n_max::Int = 64) where T
-    @assert σ > zero(T) "σ must be > 0"
-    @assert tol > zero(T) && tol < one(T) "tol must be in (0, 1)"
-    @assert n_max >= 1 "n_max must be >= 1"
-
-    two_sigma2 = T(2) * σ * σ
-    support_r = sqrt(two_sigma2 * log(inv(tol)))
-    norm_factor = inv((sqrt(T(2) * T(pi)) * σ)^3)
-
-    n_sample = 10
-    for n in 2:n_max
-        ns, ws = gausslegendre(n)
-        nsT = T.(ns)
-        wsT = T.(ws)
-        λ = gl_barycentric_weights(nsT, wsT)
-        gx = [exp(-((support_r * nsT[i])^2) / two_sigma2) for i in 1:n]
-        gy = gx
-        gz = gx
-        us = collect(LinRange(T(-1), T(1), n_sample))
-
-        max_err = zero(T)
-        for i in eachindex(us), j in eachindex(us), k in eachindex(us)
-            rx = barycentric_row(nsT, λ, us[i])
-            ry = barycentric_row(nsT, λ, us[j])
-            rz = barycentric_row(nsT, λ, us[k])
-            gx_i = sum(rx .* gx)
-            gy_j = sum(ry .* gy)
-            gz_k = sum(rz .* gz)
-            approx = norm_factor * gx_i * gy_j * gz_k
-            x = support_r * us[i]
-            y = support_r * us[j]
-            z = support_r * us[k]
-            r2 = x^2 + y^2 + z^2
-            exact = norm_factor * exp(-r2 / two_sigma2)
-            err = abs(approx - exact)
-            max_err = max(max_err, err)
-        end
-
-        if max_err <= tol
-            return n
-        end
-    end
-
-    throw(ArgumentError("could not resolve Gaussian with tol=$(tol) using n <= $(n_max)"))
-end
-
-function GaussianVolumeSource(center::NTuple{3, T}, σ::T, tol::T) where T
-    n = _gaussian_quad_order(σ, tol)
-    return GaussianVolumeSource(center, σ, n, tol)
 end

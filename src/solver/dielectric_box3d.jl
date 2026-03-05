@@ -145,3 +145,48 @@ function Rhs_dielectric_box3d_fmm3d(
     end
     return Rhs
 end
+
+function Rhs_dielectric_box3d_hybrid(
+    interface::DielectricInterface{P, Float64},
+    vs::VolumeSource{Float64, 3},
+    eps_src::Float64,
+    fmm_tol::Float64;
+    fbc_N::Int = 64,
+    h_factor::Float64 = 5.0,
+) where {P <: AbstractPanel}
+    n_points = num_points(interface)
+    n_sources = length(vs.density)
+    n_sources == 0 && return zeros(Float64, n_points)
+    fbc_N > 0 || throw(ArgumentError("fbc_N must be positive"))
+    h_factor > 0 || throw(ArgumentError("h_factor must be positive"))
+
+    sources, charges = _volume_source_fmm_sources(vs)
+
+    targets = Matrix{Float64}(undef, 3, n_points)
+    normals = Matrix{Float64}(undef, 3, n_points)
+    for (i, point) in enumerate(eachpoint(interface))
+        targets[1, i] = point.panel_point.point[1]
+        targets[2, i] = point.panel_point.point[2]
+        targets[3, i] = point.panel_point.point[3]
+        normals[1, i] = point.panel_point.normal[1]
+        normals[2, i] = point.panel_point.normal[2]
+        normals[3, i] = point.panel_point.normal[3]
+    end
+
+    h = _estimate_source_spacing(vs)
+    is_near = _classify_near_far_targets(targets, vs, h, h_factor)
+    rhs, n_near, n_far = _rhs_volume_targets_hybrid(
+        sources,
+        charges,
+        targets,
+        normals,
+        eps_src,
+        fmm_tol,
+        fbc_N,
+        is_near,
+    )
+
+    @info "rhs box3d hybrid evaluation, source points: $n_sources, near targets: $n_near, far targets: $n_far"
+    # Match the sign convention used by Rhs_dielectric_box3d / Rhs_dielectric_box3d_fmm3d.
+    return -rhs
+end
