@@ -786,7 +786,12 @@ function laplace3d_pottrg_fmm3d_corrected_hcubature(
 
     pot_base = laplace3d_pottrg_fmm3d(refined_interface, targets, fmm_tol)
     target_neighbor_list = build_target_neighbor_list(refined_interface, targets, include_edges_src; range_factor = range_factor)
-    @info "num of sources: $(num_points(interface)) → $(num_points(refined_interface)), num of hcub calculations: $(sum(length(v) for v in values(target_neighbor_list)))"
+    
+    @info "num of sources: $(num_points(interface)) → $(num_points(refined_interface))"
+    if !isempty(target_neighbor_list)
+        @info "num of hcub calculations: $(sum(length(v) for v in values(target_neighbor_list)))"
+    end
+
     corrections = laplace3d_pottrg_corrections_hcubature(refined_interface, targets, target_neighbor_list, hcubature_atol)
 
     f = charges -> begin

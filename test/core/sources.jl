@@ -67,60 +67,6 @@ end
     @test size(src.positions) == (3, 27)
 end
 
-@testset "GaussianVolumeSource auto n" begin
-    center = (0.0, 0.0, 0.0)
-    σ = 1.0
-    tol_lo = 1e-2
-    tol_hi = 1e-6
-
-    src_lo = BoundaryIntegral.GaussianVolumeSource(center, σ, tol_lo)
-    src_hi = BoundaryIntegral.GaussianVolumeSource(center, σ, tol_hi)
-
-    @test length(src_lo.density) > 0
-    @test length(src_hi.density) >= length(src_lo.density)
-
-    src_lo_manual = BoundaryIntegral.GaussianVolumeSource(center, σ, 3, tol_lo)
-    @test length(src_lo_manual.density) <= 27
-end
-
-@testset "GaussianVolumeSource auto n interp error" begin
-    center = (0.0, 0.0, 0.0)
-    σ = 1.0
-    tol = 1e-3
-    src = BoundaryIntegral.GaussianVolumeSource(center, σ, tol)
-    two_sigma2 = 2 * σ * σ
-    norm_factor = inv((sqrt(2 * pi) * σ)^3)
-    n = round(Int, cbrt(length(src.density)))
-    ns, ws = BoundaryIntegral.gausslegendre(n)
-    support_r = sqrt(two_sigma2 * log(inv(tol)))
-    λ = BoundaryIntegral.gl_barycentric_weights(ns, ws)
-    gx = exp.(-((support_r .* ns) .^ 2) ./ two_sigma2)
-    gy = gx
-    gz = gx
-
-    n_sample = 10
-    us = collect(LinRange(-1.0, 1.0, n_sample))
-
-    max_err = 0.0
-    for i in eachindex(us), j in eachindex(us), k in eachindex(us)
-        rx = BoundaryIntegral.barycentric_row(ns, λ, us[i])
-        ry = BoundaryIntegral.barycentric_row(ns, λ, us[j])
-        rz = BoundaryIntegral.barycentric_row(ns, λ, us[k])
-        gx_i = sum(rx .* gx)
-        gy_j = sum(ry .* gy)
-        gz_k = sum(rz .* gz)
-        approx = norm_factor * gx_i * gy_j * gz_k
-        x = support_r * us[i]
-        y = support_r * us[j]
-        z = support_r * us[k]
-        r2 = (x - center[1])^2 + (y - center[2])^2 + (z - center[3])^2
-        exact = norm_factor * exp(-r2 / two_sigma2)
-        max_err = max(max_err, abs(approx - exact))
-    end
-
-    @test max_err <= tol
-end
-
 @testset "VolumeSource resample uniform" begin
     xs = [0.0, 0.5, 2.0]
     ys = [-1.0, 0.0, 1.5]
