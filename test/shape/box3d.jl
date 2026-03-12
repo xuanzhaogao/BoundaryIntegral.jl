@@ -88,9 +88,11 @@ end
     n_quad = 3
     rhs_atol = 1e-6
     ns, ws = BI.gausslegendre(n_quad)
+    h = BI._estimate_source_spacing(vs)
+    tkm_kmax = BI._estimate_tkm3dc_kmax(h)
 
     resolved_direct = BI.rhs_panel3d_resolved(tpl, rhs_volume, n_quad, rhs_atol)
-    resolved_fmm = BI._rhs_panel3d_resolved_volume_fmm([tpl], vs, eps_src, ns, ws, rhs_atol, rhs_atol * 0.1, 64)[1]
+    resolved_fmm = BI._rhs_panel3d_resolved_volume_fmm([tpl], vs, eps_src, ns, ws, rhs_atol, rhs_atol * 0.1, h, tkm_kmax)[1]
 
     @test resolved_fmm || !resolved_direct
 end
@@ -218,8 +220,8 @@ end
     end
 end
 
-@testset "hybrid FMM+FBC rhs evaluation" begin
-    # Volume source near the z=+0.5 face triggers near-field FBC path
+@testset "hybrid FMM+TKM rhs evaluation" begin
+    # Volume source near the z=+0.5 face triggers the near-field TKM path.
     center = (0.0, 0.0, 0.45)
     σ = 0.05
     vs = BI.GaussianVolumeSource(center, σ, 8, 1e-6)
@@ -227,7 +229,7 @@ end
 
     interface = BI.single_dielectric_box3d_rhs_adaptive(
         1.0, 1.0, 1.0, 4, vs, eps_src, 0.3, 1e-4, 4.0, 1.0, Float64;
-        max_depth = 3, fbc_N = 64,
+        max_depth = 3,
     )
 
     @test BI.num_points(interface) > 0
@@ -261,6 +263,7 @@ end
     eps_src = 2.0
     vs = BI.GaussianVolumeSource(center, σ, 16, 1e-9)
     sources, charges = BI._volume_source_fmm_sources(vs)
+    tkm_kmax = BI._estimate_tkm3dc_kmax(vs)
 
     xs = collect(range(-0.2, 0.2; length = 7))
     nt = length(xs)^2
@@ -274,10 +277,10 @@ end
     end
 
     rhs_far, _, _ = BI._rhs_volume_targets_hybrid(
-        sources, charges, targets, normals, eps_src, 1e-9, 128, fill(false, nt),
+        sources, charges, targets, normals, eps_src, 1e-9, tkm_kmax, fill(false, nt),
     )
     rhs_near, _, _ = BI._rhs_volume_targets_hybrid(
-        sources, charges, targets, normals, eps_src, 1e-9, 128, fill(true, nt),
+        sources, charges, targets, normals, eps_src, 1e-9, tkm_kmax, fill(true, nt),
     )
 
     mean_abs_far = sum(abs.(rhs_far)) / nt
@@ -294,6 +297,7 @@ end
     eps_src = 2.0
     vs = BI.GaussianVolumeSource(center, σ, 20, 1e-9)
     sources, charges = BI._volume_source_fmm_sources(vs)
+    base_kmax = BI._estimate_tkm3dc_kmax(vs)
 
     xs = collect(range(-1.1, 1.1; length = 9))
     nt = length(xs)^2
@@ -328,9 +332,9 @@ end
     @test !all(is_near)
 
     rel_errors = Float64[]
-    for fbc_N in (32, 64, 96, 128)
+    for kmax_factor in (0.5, 0.75, 1.0, 1.25)
         rhs, _, _ = BI._rhs_volume_targets_hybrid(
-            sources, charges, targets, normals, eps_src, 1e-9, fbc_N, is_near,
+            sources, charges, targets, normals, eps_src, 1e-9, kmax_factor * base_kmax, is_near,
         )
         rel = norm(rhs .- rhs_ref) / max(norm(rhs_ref), eps(Float64))
         push!(rel_errors, rel)

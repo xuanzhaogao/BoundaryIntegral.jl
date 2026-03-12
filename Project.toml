@@ -4,7 +4,6 @@ version = "1.0.0-DEV"
 authors = ["Xuanzhao Gao <xgao@flatironinstitute.org> and contributors"]
 
 [deps]
-FBCPoisson = "1f0f7e10-245c-4955-b3bf-660f62c508bb"
 FMM2D = "2d63477d-9690-4b75-bcc1-c3461d43fecc"
 FMM3D = "1e13804c-f9b7-11ea-0ef0-29f3b1745df8"
 FastGaussQuadrature = "442a2c76-b920-505d-bb47-c5924d526838"
@@ -21,6 +20,7 @@ SparseMatricesCOO = "fa32481b-f100-4b48-8dc8-c62f61b13870"
 SpecialFunctions = "276daf66-3868-5448-9aa4-cd146d93841b"
 StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
 Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
+TKM3D = "5e3dfc9c-492c-4308-90e6-1b6681d75e39"
 
 [weakdeps]
 GLMakie = "e9467ef8-e4e7-5192-8a1a-b1aee30e663a"
@@ -46,6 +46,7 @@ SparseMatricesCOO = "0.2.6"
 SpecialFunctions = "2.6.1"
 StaticArrays = "1.9.16"
 Statistics = "1.11.1"
+TKM3D = "1"
 julia = "1.10, 1.11, 1.12"
 
 [extras]

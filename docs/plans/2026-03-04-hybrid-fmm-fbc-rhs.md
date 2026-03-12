@@ -1,5 +1,7 @@
 # Hybrid FMM3D + FBCPoisson RHS Evaluation Implementation Plan
 
+> Superseded on 2026-03-11 by `docs/plans/2026-03-11-tkm3d-volume-nearfield-design.md` and `docs/plans/2026-03-11-tkm3d-volume-nearfield.md`.
+
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** Modify `_rhs_panel3d_resolved_volume_fmm` and `single_dielectric_box3d_rhs_adaptive` (VolumeSource variant) to use FBCPoisson (`lfbc3d`) for panels whose targets are within 5h of source points, and FMM3D (`lfmm3d`) for the rest.

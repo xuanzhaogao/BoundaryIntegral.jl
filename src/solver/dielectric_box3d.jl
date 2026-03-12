@@ -151,13 +151,12 @@ function Rhs_dielectric_box3d_hybrid(
     vs::VolumeSource{Float64, 3},
     eps_src::Float64,
     fmm_tol::Float64;
-    fbc_N::Int = 64,
+    tkm_kmax::Union{Nothing, Float64} = nothing,
     h_factor::Float64 = 5.0,
 ) where {P <: AbstractPanel}
     n_points = num_points(interface)
     n_sources = length(vs.density)
     n_sources == 0 && return zeros(Float64, n_points)
-    fbc_N > 0 || throw(ArgumentError("fbc_N must be positive"))
     h_factor > 0 || throw(ArgumentError("h_factor must be positive"))
 
     sources, charges = _volume_source_fmm_sources(vs)
@@ -174,6 +173,8 @@ function Rhs_dielectric_box3d_hybrid(
     end
 
     h = _estimate_source_spacing(vs)
+    resolved_tkm_kmax = isnothing(tkm_kmax) ? _estimate_tkm3dc_kmax(h) : tkm_kmax
+    resolved_tkm_kmax > 0 || throw(ArgumentError("tkm_kmax must be positive"))
     is_near = _classify_near_far_targets(targets, vs, h, h_factor)
     rhs, n_near, n_far = _rhs_volume_targets_hybrid(
         sources,
@@ -182,7 +183,7 @@ function Rhs_dielectric_box3d_hybrid(
         normals,
         eps_src,
         fmm_tol,
-        fbc_N,
+        resolved_tkm_kmax,
         is_near,
     )
 

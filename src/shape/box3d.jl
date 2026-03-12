@@ -302,6 +302,15 @@ function _estimate_source_spacing(vs::VolumeSource{T, 3}) where T
     return h
 end
 
+@inline function _estimate_tkm3dc_kmax(h::T) where T
+    h > zero(T) || throw(ArgumentError("source spacing must be positive"))
+    return T(π) / h
+end
+
+function _estimate_tkm3dc_kmax(vs::VolumeSource{T, 3}) where T
+    return _estimate_tkm3dc_kmax(_estimate_source_spacing(vs))
+end
+
 function _classify_near_far_panels(panels::Vector{TempPanel3D{T}}, vs::VolumeSource{T, 3}, h::T, h_factor::T = T(5)) where T
     n_panels = length(panels)
     is_near = fill(false, n_panels)
@@ -351,7 +360,7 @@ function _rhs_volume_targets_hybrid(
     normals::Matrix{T},
     eps_src::T,
     fmm_tol::T,
-    fbc_N::Int,
+    tkm_kmax::T,
     is_near::Vector{Bool},
 ) where T
     n_targets = size(targets, 2)
@@ -384,9 +393,11 @@ function _rhs_volume_targets_hybrid(
     n_near = length(near_idxs)
     if n_near > 0
         near_targets = targets[:, near_idxs]
-        _, grad_near = lfbc3d(fbc_N, sources, charges, near_targets, fmm_tol, 2)
+        vals_near = ltkm3dc(fmm_tol, sources; charges = charges, targets = near_targets, pgt = 2, kmax = tkm_kmax)
+        vals_near.ier == 0 || error("ltkm3dc target evaluation failed with ier=$(vals_near.ier)")
+        grad_near = vals_near.gradtarg
         for (k, i) in enumerate(near_idxs)
-            # FBCPoisson gradient already includes the 1/(4π) kernel normalization.
+            # TKM3D gradient already uses the free-space 1/(4πr) normalization.
             rhs_vals[i] = _rhs_from_grad(view(normals, :, i), view(grad_near, :, k), eps_src, one(T))
         end
     end
@@ -402,7 +413,8 @@ function _rhs_panel3d_resolved_volume_fmm(
     ws::Vector{T},
     atol::T,
     fmm_tol::T,
-    fbc_N::Int,
+    h::T,
+    tkm_kmax::T,
 ) where T
     n_panels = length(panels)
     if n_panels == 0
@@ -460,8 +472,6 @@ function _rhs_panel3d_resolved_volume_fmm(
 
     sources, charges = _volume_source_fmm_sources(vs)
 
-    # Classify panels as near or far based on source spacing
-    h = _estimate_source_spacing(vs)
     is_near = _classify_near_far_panels(panels, vs, h)
 
     # Promote panel-level near/far tags to target-level flags.
@@ -478,7 +488,7 @@ function _rhs_panel3d_resolved_volume_fmm(
         normals,
         eps_src,
         fmm_tol,
-        fbc_N,
+        tkm_kmax,
         is_near_target,
     )
 
@@ -607,7 +617,7 @@ function rect_panel3d_rhs_adaptive_panels(
     l_ec::T,
     rhs_atol::T,
     max_depth::Int,
-    fbc_N::Int;
+    tkm_kmax::T;
 ) where T
     ns, ws = gausslegendre(n_quad)
     Lab = norm(b .- a)
@@ -621,6 +631,7 @@ function rect_panel3d_rhs_adaptive_panels(
 
     max_depth = max(max_depth, 0)
     fmm_tol = rhs_atol * T(0.1)
+    h = _estimate_source_spacing(vs)
 
     panels_by_depth = [TempPanel3D{T}[] for _ in 0:max_depth]
     for tpl in rough
@@ -638,7 +649,7 @@ function rect_panel3d_rhs_adaptive_panels(
             continue
         end
 
-        resolved = _rhs_panel3d_resolved_volume_fmm(current, vs, eps_src, ns, ws, rhs_atol, fmm_tol, fbc_N)
+        resolved = _rhs_panel3d_resolved_volume_fmm(current, vs, eps_src, ns, ws, rhs_atol, fmm_tol, h, tkm_kmax)
         for i in eachindex(current)
             tpl = current[i]
             if resolved[i]
@@ -893,10 +904,13 @@ function single_dielectric_box3d_rhs_adaptive(
     ::Type{T} = Float64;
     max_depth::Int = 100,
     alpha::T = sqrt(T(2)),
-    fbc_N::Int = 64,
+    tkm_kmax::Union{Nothing, T} = nothing,
 ) where T
     ns, ws = gausslegendre(n_quad)
     fmm_tol = rhs_atol * T(0.1)
+    h = _estimate_source_spacing(vs)
+    resolved_tkm_kmax = isnothing(tkm_kmax) ? _estimate_tkm3dc_kmax(h) : tkm_kmax
+    resolved_tkm_kmax > zero(T) || throw(ArgumentError("tkm_kmax must be positive"))
 
     @info "box3d volume source rhs adaptive panel generation, source points: $(length(vs.density))"
 
@@ -906,7 +920,7 @@ function single_dielectric_box3d_rhs_adaptive(
     depth = 0
     while !isempty(unsolved) && depth < max_depth
         @info "  depth $depth, unsolved panels: $(length(unsolved))"
-        resolved = _rhs_panel3d_resolved_volume_fmm(unsolved, vs, eps_src, ns, ws, rhs_atol, fmm_tol, fbc_N)
+        resolved = _rhs_panel3d_resolved_volume_fmm(unsolved, vs, eps_src, ns, ws, rhs_atol, fmm_tol, h, resolved_tkm_kmax)
         next_unsolved = TempPanel3D{T}[]
         for i in eachindex(unsolved)
             tpl = unsolved[i]

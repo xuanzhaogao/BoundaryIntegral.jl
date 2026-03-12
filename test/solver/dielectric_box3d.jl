@@ -161,10 +161,21 @@ end
     @test any(is_near)
     @test !all(is_near)
 
-    rhs_hybrid = BI.Rhs_dielectric_box3d_hybrid(interface, vs, eps_src, 1e-8; fbc_N = 128)
+    rhs_hybrid = BI.Rhs_dielectric_box3d_hybrid(interface, vs, eps_src, 1e-8)
 
     # use the analytical results for Gaussian to validate the rhs
     rhs_exact = BI.Rhs_dielectric_box3d_gaussian(interface, (0.0, 0.0, 0.6), 0.1, 1.0)
 
     @test norm(rhs_hybrid - rhs_exact) / norm(rhs_exact) < 1e-8
+end
+
+@testset "dielectric_box3d volume backend wiring" begin
+    root = pkgdir(BoundaryIntegral)
+    entrypoint = read(joinpath(root, "src", "BoundaryIntegral.jl"), String)
+    box3d = read(joinpath(root, "src", "shape", "box3d.jl"), String)
+
+    @test occursin("using TKM3D", entrypoint)
+    @test !occursin("using FBCPoisson", entrypoint)
+    @test occursin("ltkm3dc", box3d)
+    @test !occursin("lfbc3d", box3d)
 end

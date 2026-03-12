@@ -8,7 +8,7 @@ using NearestNeighbors
 using ForwardDiff
 
 using FMM2D, FMM3D
-using FBCPoisson
+using TKM3D
 
 #core types
 export FlatPanel
