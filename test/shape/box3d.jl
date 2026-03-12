@@ -257,6 +257,55 @@ end
     @test !all(is_near)
 end
 
+@testset "hybrid rhs refinement uses pointwise target classification" begin
+    center = (0.0, 0.0, 0.45)
+    σ = 0.05
+    vs = BI.GaussianVolumeSource(center, σ, 8, 1e-6)
+    h = BI._estimate_source_spacing(vs)
+    ns, ws = BI.gausslegendre(4)
+    panels = BI._box3d_rhs_adaptive_initial_panels(4.0, 4.0, 1.0, sqrt(2.0))
+
+    targets, normals, n_per_panel = BI._rhs_panel3d_refinement_targets(panels, ns, ws)
+
+    @test size(targets, 1) == 3
+    @test size(normals, 1) == 3
+    @test size(targets, 2) == length(panels) * n_per_panel
+    @test size(normals, 2) == size(targets, 2)
+
+    is_near_panel = BI._classify_near_far_panels(panels, vs, h)
+    is_near_target = BI._classify_near_far_targets(targets, vs, h)
+
+    near_panel_ids = findall(is_near_panel)
+    @test !isempty(near_panel_ids)
+    near_counts = Int[]
+    for panel_idx in near_panel_ids
+        panel_range = ((panel_idx - 1) * n_per_panel + 1):(panel_idx * n_per_panel)
+        n_near_targets = count(view(is_near_target, panel_range))
+        push!(near_counts, n_near_targets)
+    end
+    @test any(0 < n_near_targets < n_per_panel for n_near_targets in near_counts)
+end
+
+@testset "hybrid rhs refinement routes only pointwise-near targets to TKM" begin
+    center = (0.0, 0.0, 0.45)
+    σ = 0.05
+    vs = BI.GaussianVolumeSource(center, σ, 8, 1e-6)
+    h = BI._estimate_source_spacing(vs)
+    ns, ws = BI.gausslegendre(4)
+    panels = BI._box3d_rhs_adaptive_initial_panels(4.0, 4.0, 1.0, sqrt(2.0))
+    targets, normals, n_per_panel = BI._rhs_panel3d_refinement_targets(panels, ns, ws)
+    expected_is_near = BI._classify_near_far_targets(targets, vs, h)
+    expected_near = count(expected_is_near)
+    expected_far = size(targets, 2) - expected_near
+    tkm_kmax = BI._estimate_tkm3dc_kmax(h)
+
+    @test 0 < expected_near < size(targets, 2)
+    @test_logs (:info, Regex("near targets: $expected_near, far targets: $expected_far")) begin
+        resolved = BI._rhs_panel3d_resolved_volume_fmm(panels, vs, 2.0, ns, ws, 1e-4, 1e-5, h, tkm_kmax)
+        @test length(resolved) == length(panels)
+    end
+end
+
 @testset "hybrid rhs backend scaling consistency" begin
     center = (0.0, 0.0, 0.05)
     σ = 0.08

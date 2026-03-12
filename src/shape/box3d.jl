@@ -405,6 +405,65 @@ function _rhs_volume_targets_hybrid(
     return rhs_vals, n_near, n_far
 end
 
+function _rhs_panel3d_refinement_targets(
+    panels::Vector{TempPanel3D{T}},
+    ns::AbstractVector{T},
+    ws::AbstractVector{T};
+    n_pts::Int = 10,
+) where T
+    length(ns) == length(ws) || throw(ArgumentError("ns and ws must have the same length"))
+    n_pts >= 1 || throw(ArgumentError("n_pts must be >= 1"))
+
+    n_panels = length(panels)
+    n_quad = length(ns)
+    n_test = n_pts * n_pts
+    n_per_panel = n_quad * n_quad + n_test
+    n_targets = n_panels * n_per_panel
+    targets = Matrix{T}(undef, 3, n_targets)
+    normals = Matrix{T}(undef, 3, n_targets)
+    xs = range(-one(T), one(T); length = n_pts)
+    ys = range(-one(T), one(T); length = n_pts)
+
+    idx = 0
+    for tpl in panels
+        a, b, c, d = tpl.a, tpl.b, tpl.c, tpl.d
+        cc = (a .+ b .+ c .+ d) ./ 4
+        bma = b .- a
+        dma = d .- a
+        normal = tpl.normal
+
+        for i in 1:n_quad
+            u = ns[i]
+            for j in 1:n_quad
+                v = ns[j]
+                idx += 1
+                p = cc .+ bma .* (u / 2) .+ dma .* (v / 2)
+                targets[1, idx] = p[1]
+                targets[2, idx] = p[2]
+                targets[3, idx] = p[3]
+                normals[1, idx] = normal[1]
+                normals[2, idx] = normal[2]
+                normals[3, idx] = normal[3]
+            end
+        end
+
+        for u in xs
+            for v in ys
+                idx += 1
+                p = cc .+ bma .* (u / 2) .+ dma .* (v / 2)
+                targets[1, idx] = p[1]
+                targets[2, idx] = p[2]
+                targets[3, idx] = p[3]
+                normals[1, idx] = normal[1]
+                normals[2, idx] = normal[2]
+                normals[3, idx] = normal[3]
+            end
+        end
+    end
+
+    return targets, normals, n_per_panel
+end
+
 function _rhs_panel3d_resolved_volume_fmm(
     panels::Vector{TempPanel3D{T}},
     vs::VolumeSource{T, 3},
@@ -426,60 +485,11 @@ function _rhs_panel3d_resolved_volume_fmm(
     n_pts = 10
     xs = range(-one(T), one(T); length = n_pts)
     ys = range(-one(T), one(T); length = n_pts)
-    n_test = n_pts * n_pts
-    n_per_panel = n_quad * n_quad + n_test
-    n_targets = n_panels * n_per_panel
-
-    targets = Matrix{T}(undef, 3, n_targets)
-    normals = Matrix{T}(undef, 3, n_targets)
-
-    t = 0
-    for tpl in panels
-        a, b, c, d = tpl.a, tpl.b, tpl.c, tpl.d
-        cc = (a .+ b .+ c .+ d) ./ 4
-        bma = b .- a
-        dma = d .- a
-        normal = tpl.normal
-
-        for i in 1:n_quad
-            u = ns[i]
-            for j in 1:n_quad
-                v = ns[j]
-                t += 1
-                p = cc .+ bma .* (u / 2) .+ dma .* (v / 2)
-                targets[1, t] = p[1]
-                targets[2, t] = p[2]
-                targets[3, t] = p[3]
-                normals[1, t] = normal[1]
-                normals[2, t] = normal[2]
-                normals[3, t] = normal[3]
-            end
-        end
-
-        for u in xs
-            for v in ys
-                t += 1
-                p = cc .+ bma .* (u / 2) .+ dma .* (v / 2)
-                targets[1, t] = p[1]
-                targets[2, t] = p[2]
-                targets[3, t] = p[3]
-                normals[1, t] = normal[1]
-                normals[2, t] = normal[2]
-                normals[3, t] = normal[3]
-            end
-        end
-    end
+    targets, normals, n_per_panel = _rhs_panel3d_refinement_targets(panels, ns, ws; n_pts = n_pts)
+    n_targets = size(targets, 2)
 
     sources, charges = _volume_source_fmm_sources(vs)
-
-    is_near = _classify_near_far_panels(panels, vs, h)
-
-    # Promote panel-level near/far tags to target-level flags.
-    is_near_target = Vector{Bool}(undef, n_targets)
-    for p in 1:n_panels
-        panel_range = ((p - 1) * n_per_panel + 1):(p * n_per_panel)
-        fill!(view(is_near_target, panel_range), is_near[p])
-    end
+    is_near_target = _classify_near_far_targets(targets, vs, h)
 
     rhs_vals, n_near, n_far = _rhs_volume_targets_hybrid(
         sources,
