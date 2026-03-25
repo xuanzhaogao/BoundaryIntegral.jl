@@ -2,6 +2,7 @@ using BoundaryIntegral
 import BoundaryIntegral as BI
 using LinearAlgebra, Krylov
 using Random
+using SpecialFunctions: erf
 using Test
 
 @testset "dielectric_box3d" begin
@@ -167,6 +168,69 @@ end
     rhs_exact = BI.Rhs_dielectric_box3d_gaussian(interface, (0.0, 0.0, 0.6), 0.1, 1.0)
 
     @test norm(rhs_hybrid - rhs_exact) / norm(rhs_exact) < 1e-8
+end
+
+@testset "screened_volume_source" begin
+    eps_in = 4.0
+    eps_out = 1.0
+    interface = BI.single_dielectric_box3d(1.0, 1.0, 1.0, 2, 0.2, eps_in, eps_out, Float64; alpha = sqrt(2))
+
+    # mode is required (no default)
+    vs_small = BI.VolumeSource([(0.0, 0.0, 0.0), (0.8, 0.0, 0.0)], [0.5, 0.25], [2.0, -3.0])
+    @test_throws MethodError BI.screened_volume_source(interface, vs_small)
+    @test_throws MethodError BI.screened_volume_source(1.0, 1.0, 1.0, vs_small, eps_in, eps_out)
+
+    # bandwidth validation
+    @test_throws ArgumentError BI.SoftMixPermittivity(0.0)
+    @test_throws ArgumentError BI.SoftMixInversePermittivity(-0.1)
+
+    # sharp screening
+    rho0 = 2.0
+    points = [
+        (0.0, 0.0, 0.0),   # interior
+        (0.5, 0.0, 0.0),   # face
+        (0.5, 0.5, 0.0),   # edge
+        (0.5, 0.5, 0.5),   # corner
+        (1.5, 0.0, 0.0),   # exterior
+    ]
+    vs = BI.VolumeSource(points, ones(length(points)), fill(rho0, length(points)))
+
+    sharp = BI.screened_volume_source(interface, vs, BI.SharpScreening())
+    sharp_box = BI.screened_volume_source(1.0, 1.0, 1.0, vs, eps_in, eps_out, BI.SharpScreening())
+    @test sharp.density ≈ sharp_box.density
+    @test sharp.density ≈ [rho0/eps_in, rho0/eps_in, rho0/eps_in, rho0/eps_in, rho0/eps_out]
+
+    # soft mix — reference formulas
+    bandwidth = 0.05
+    min_corner = (-0.5, -0.5, -0.5)
+    max_corner = (0.5, 0.5, 0.5)
+    H(t) = (1 + erf(t / bandwidth)) / 2
+    screen(p) =
+        H(p[1] - min_corner[1]) * H(max_corner[1] - p[1]) *
+        H(p[2] - min_corner[2]) * H(max_corner[2] - p[2]) *
+        H(p[3] - min_corner[3]) * H(max_corner[3] - p[3])
+
+    # SoftMixPermittivity
+    soft_eps = BI.screened_volume_source(interface, vs, BI.SoftMixPermittivity(bandwidth))
+    soft_eps_box = BI.screened_volume_source(1.0, 1.0, 1.0, vs, eps_in, eps_out, BI.SoftMixPermittivity(bandwidth))
+    @test soft_eps.density ≈ soft_eps_box.density
+    ref_eps = [rho0 / (eps_in * screen(p) + eps_out * (1 - screen(p))) for p in points]
+    @test soft_eps.density ≈ ref_eps atol = 1e-12
+    @test soft_eps.density[1] ≈ rho0 / eps_in atol = 1e-12
+    @test soft_eps.density[end] ≈ rho0 / eps_out atol = 1e-12
+
+    # SoftMixInversePermittivity
+    soft_inv = BI.screened_volume_source(interface, vs, BI.SoftMixInversePermittivity(bandwidth))
+    soft_inv_box = BI.screened_volume_source(1.0, 1.0, 1.0, vs, eps_in, eps_out, BI.SoftMixInversePermittivity(bandwidth))
+    @test soft_inv.density ≈ soft_inv_box.density
+    ref_inv = [rho0 * (screen(p) / eps_in + (1 - screen(p)) / eps_out) for p in points]
+    @test soft_inv.density ≈ ref_inv atol = 1e-12
+    @test soft_inv.density[1] ≈ rho0 / eps_in atol = 1e-12
+    @test soft_inv.density[end] ≈ rho0 / eps_out atol = 1e-12
+
+    # RHS convenience overloads use sharp screening internally
+    vs_sharp = BI.screened_volume_source(interface, vs_small, BI.SharpScreening())
+    @test BI.Rhs_dielectric_box3d(interface, vs_small) ≈ BI.Rhs_dielectric_box3d(interface, vs_sharp, 1.0)
 end
 
 @testset "dielectric_box3d volume backend wiring" begin

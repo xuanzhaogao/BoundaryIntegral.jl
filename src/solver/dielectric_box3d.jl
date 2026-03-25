@@ -111,6 +111,10 @@ function Rhs_dielectric_box3d(interface::DielectricInterface{P, T}, vs::VolumeSo
     return Rhs
 end
 
+function Rhs_dielectric_box3d(interface::DielectricInterface{P, T}, vs::VolumeSource{T, 3}) where {T, P <: FlatPanel{T, 3}}
+    return Rhs_dielectric_box3d(interface, screened_volume_source(interface, vs, SharpScreening()), one(T))
+end
+
 function Rhs_dielectric_box3d_fmm3d(
     interface::DielectricInterface{P, Float64},
     vs::VolumeSource{Float64, 3},
@@ -144,6 +148,14 @@ function Rhs_dielectric_box3d_fmm3d(
         Rhs[i] = dot(normals[:, i], grad[:, i]) / (4π * eps_src)
     end
     return Rhs
+end
+
+function Rhs_dielectric_box3d_fmm3d(
+    interface::DielectricInterface{P, Float64},
+    vs::VolumeSource{Float64, 3},
+    thresh::Float64,
+) where {P <: FlatPanel{Float64, 3}}
+    return Rhs_dielectric_box3d_fmm3d(interface, screened_volume_source(interface, vs, SharpScreening()), 1.0, thresh)
 end
 
 function Rhs_dielectric_box3d_hybrid(

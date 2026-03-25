@@ -216,6 +216,151 @@ function VolumeSource(points::Vector{NTuple{3, T}}, weights::Vector{T}, density:
     return VolumeSource(positions, weights, density; tol = tol)
 end
 
+abstract type AbstractScreeningMode end
+
+struct SharpScreening <: AbstractScreeningMode end
+
+struct SoftMixPermittivity{T} <: AbstractScreeningMode
+    bandwidth::T
+    function SoftMixPermittivity(bandwidth::T) where {T}
+        bandwidth > zero(T) || throw(ArgumentError("bandwidth must be positive"))
+        return new{T}(bandwidth)
+    end
+end
+
+struct SoftMixInversePermittivity{T} <: AbstractScreeningMode
+    bandwidth::T
+    function SoftMixInversePermittivity(bandwidth::T) where {T}
+        bandwidth > zero(T) || throw(ArgumentError("bandwidth must be positive"))
+        return new{T}(bandwidth)
+    end
+end
+
+function _interface_box_bounds(interface::DielectricInterface{P, T}) where {T, P <: FlatPanel{T, 3}}
+    isempty(interface.panels) && throw(ArgumentError("interface must contain at least one panel"))
+
+    min_corner = (typemax(T), typemax(T), typemax(T))
+    max_corner = (typemin(T), typemin(T), typemin(T))
+    for panel in interface.panels
+        for corner in panel.corners
+            min_corner = (
+                min(min_corner[1], corner[1]),
+                min(min_corner[2], corner[2]),
+                min(min_corner[3], corner[3]),
+            )
+            max_corner = (
+                max(max_corner[1], corner[1]),
+                max(max_corner[2], corner[2]),
+                max(max_corner[3], corner[3]),
+            )
+        end
+    end
+
+    return min_corner, max_corner
+end
+
+function _uniform_interface_eps(interface::DielectricInterface{P, T}) where {T, P <: FlatPanel{T, 3}}
+    isempty(interface.panels) && throw(ArgumentError("interface must contain at least one panel"))
+    eps_in = interface.eps_in[1]
+    eps_out = interface.eps_out[1]
+    all(isequal(eps_in), interface.eps_in) || throw(ArgumentError("screened_volume_source requires a uniform eps_in across the interface"))
+    all(isequal(eps_out), interface.eps_out) || throw(ArgumentError("screened_volume_source requires a uniform eps_out across the interface"))
+    return eps_in, eps_out
+end
+
+@inline function _point_in_box(point::NTuple{3, T}, min_corner::NTuple{3, T}, max_corner::NTuple{3, T}, tol::T) where {T}
+    return (min_corner[1] - tol <= point[1] <= max_corner[1] + tol) &&
+        (min_corner[2] - tol <= point[2] <= max_corner[2] + tol) &&
+        (min_corner[3] - tol <= point[3] <= max_corner[3] + tol)
+end
+
+@inline function _smooth_screen_factor(distance::T, bandwidth::T) where {T}
+    return (one(T) + erf(distance / bandwidth)) / T(2)
+end
+
+@inline function _box_screen(point::NTuple{3, T}, min_corner::NTuple{3, T}, max_corner::NTuple{3, T}, bandwidth::T) where {T}
+    return _smooth_screen_factor(point[1] - min_corner[1], bandwidth) *
+        _smooth_screen_factor(max_corner[1] - point[1], bandwidth) *
+        _smooth_screen_factor(point[2] - min_corner[2], bandwidth) *
+        _smooth_screen_factor(max_corner[2] - point[2], bandwidth) *
+        _smooth_screen_factor(point[3] - min_corner[3], bandwidth) *
+        _smooth_screen_factor(max_corner[3] - point[3], bandwidth)
+end
+
+@inline function _screened_permittivity(::SharpScreening, point::NTuple{3, T}, min_corner::NTuple{3, T}, max_corner::NTuple{3, T}, eps_in::T, eps_out::T, tol::T) where {T}
+    return _point_in_box(point, min_corner, max_corner, tol) ? eps_in : eps_out
+end
+
+@inline function _screened_permittivity(mode::SoftMixPermittivity, point::NTuple{3, T}, min_corner::NTuple{3, T}, max_corner::NTuple{3, T}, eps_in::T, eps_out::T, ::T) where {T}
+    bandwidth = T(mode.bandwidth)
+    s = _box_screen(point, min_corner, max_corner, bandwidth)
+    return eps_in * s + eps_out * (one(T) - s)
+end
+
+@inline function _screened_permittivity(mode::SoftMixInversePermittivity, point::NTuple{3, T}, min_corner::NTuple{3, T}, max_corner::NTuple{3, T}, eps_in::T, eps_out::T, ::T) where {T}
+    bandwidth = T(mode.bandwidth)
+    s = _box_screen(point, min_corner, max_corner, bandwidth)
+    return inv(s / eps_in + (one(T) - s) / eps_out)
+end
+
+function _screened_volume_density(
+    vs::VolumeSource{T, 3},
+    min_corner::NTuple{3, T},
+    max_corner::NTuple{3, T},
+    eps_in::T,
+    eps_out::T,
+    mode::AbstractScreeningMode,
+    tol::T,
+) where {T}
+    rho = similar(vs.density)
+    for s in eachindex(vs.density)
+        pos = volume_source_point(vs, s)
+        eps_local = _screened_permittivity(mode, pos, min_corner, max_corner, eps_in, eps_out, tol)
+        rho[s] = vs.density[s] / eps_local
+    end
+    return rho
+end
+
+"""
+    screened_volume_source(Lx, Ly, Lz, vs, eps_in, eps_out, mode; tol = ...)
+    screened_volume_source(interface, vs, mode; tol = ...)
+
+Apply the screened density selected by `mode` to each volume sample.
+"""
+function screened_volume_source(
+    Lx::T,
+    Ly::T,
+    Lz::T,
+    vs::VolumeSource{T, 3},
+    eps_in::T,
+    eps_out::T,
+    mode::AbstractScreeningMode;
+    tol::T = sqrt(eps(T)) * max(max(abs(Lx), abs(Ly)), abs(Lz)),
+) where {T}
+    min_corner = (-Lx / 2, -Ly / 2, -Lz / 2)
+    max_corner = (Lx / 2, Ly / 2, Lz / 2)
+    rho = _screened_volume_density(vs, min_corner, max_corner, eps_in, eps_out, mode, tol)
+    return VolumeSource(copy(vs.positions), copy(vs.weights), rho)
+end
+
+function screened_volume_source(
+    interface::DielectricInterface{P, T},
+    vs::VolumeSource{T, 3},
+    mode::AbstractScreeningMode;
+    tol::T = begin
+        min_corner, max_corner = _interface_box_bounds(interface)
+        sqrt(eps(T)) * max(
+            max(abs(max_corner[1] - min_corner[1]), abs(max_corner[2] - min_corner[2])),
+            abs(max_corner[3] - min_corner[3]),
+        )
+    end,
+) where {T, P <: FlatPanel{T, 3}}
+    min_corner, max_corner = _interface_box_bounds(interface)
+    eps_in, eps_out = _uniform_interface_eps(interface)
+    rho = _screened_volume_density(vs, min_corner, max_corner, eps_in, eps_out, mode, tol)
+    return VolumeSource(copy(vs.positions), copy(vs.weights), rho)
+end
+
 function GaussianVolumeSource(center::NTuple{3, T}, σ::T, n::Int, tol::T) where T
     @assert n >= 1 "n must be >= 1"
     @assert σ > zero(T) "σ must be > 0"

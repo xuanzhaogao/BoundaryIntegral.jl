@@ -18,6 +18,8 @@ export interface_approx
 export interface_uniform_samples
 
 export PointSource, VolumeSource
+export screened_volume_source
+export SharpScreening, SoftMixPermittivity, SoftMixInversePermittivity
 
 # kernel functions
 export laplace2d_pot, laplace2d_grad
