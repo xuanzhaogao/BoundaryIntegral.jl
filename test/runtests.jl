@@ -12,6 +12,9 @@ using Test
     include("utils/quad_order.jl")
     include("utils/best_grid.jl")
 
+    # visualization helpers
+    include("visualization/extensions.jl")
+
     # core
     include("core/panels.jl")
     include("core/sources.jl")

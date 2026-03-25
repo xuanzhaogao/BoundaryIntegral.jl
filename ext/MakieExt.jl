@@ -1,6 +1,6 @@
-module GLMakieExt
+module MakieExt
 
-using GLMakie
+using Makie
 using BoundaryIntegral
 using BoundaryIntegral: VolumeSource
 using BoundaryIntegral: AbstractPanel, DielectricInterface, build_neighbor_list
@@ -122,7 +122,7 @@ function viz_3d!(
         end
     end
 
-    gb = GLMakie.GeometryBasics
+    gb = Makie.GeometryBasics
     nan_pt = gb.Point3f(NaN, NaN, NaN)
 
     line_groups = Dict{Symbol, Vector{gb.Point3f}}(
