@@ -13,7 +13,7 @@ BoundaryIntegral.jl provides boundary integral operators and solvers for Laplace
 - Dielectric interface builders for box geometries.
 - Direct and FMM-accelerated linear operators for iterative solves.
 - Simple linear algebra helpers (LU and GMRES wrappers).
-- Optional GLMakie visualization extension.
+- Optional Makie visualization extension.
 
 ## Installation
 
@@ -71,11 +71,16 @@ sigma = BI.solve_gmres(lhs_fmm, rhs, 1e-12, 1e-12)
 
 ## Visualization
 
-Visualization helpers live under `viz_2d` and `viz_3d`. To enable GLMakie-based plotting, install GLMakie and load the extension:
+Visualization helpers live under `viz_2d` and `viz_3d`. To use them, install Makie and a backend, then load the backend before `BoundaryIntegral`:
 
 ```julia
 using Pkg
-Pkg.add("GLMakie")
+Pkg.add(["Makie", "CairoMakie"])
+```
+
+```julia
+using CairoMakie
+using BoundaryIntegral
 ```
 
 ## Development
