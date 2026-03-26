@@ -290,6 +290,107 @@ function _box3d_faces_at_center(center::NTuple{3, T}, Lx::T, Ly::T, Lz::T) where
     return faces
 end
 
+# Check if two axis-aligned 3D rectangular faces overlap.
+# Requirements: both faces must be co-planar (same plane) and have opposite normals.
+# Returns (has_overlap::Bool, region) where region is (a, b, c, d) corners of the overlap rectangle.
+# The overlap rectangle's normal is taken from face1.
+function _rect_overlap_3d(
+    a1::NTuple{3, T}, b1::NTuple{3, T}, c1::NTuple{3, T}, d1::NTuple{3, T}, n1::NTuple{3, T},
+    a2::NTuple{3, T}, b2::NTuple{3, T}, c2::NTuple{3, T}, d2::NTuple{3, T}, n2::NTuple{3, T};
+    tol::T = T(1e-10)
+) where T
+    # Check opposite normals
+    if norm(n1 .+ n2) > tol
+        return false, nothing
+    end
+
+    # Check co-planarity: all corners of face2 must lie on the plane of face1
+    # plane equation: dot(n1, p - a1) = 0
+    for p in (a2, b2, c2, d2)
+        if abs(dot(n1, p .- a1)) > tol
+            return false, nothing
+        end
+    end
+
+    # Project onto 2D: find the two tangential axes
+    # For axis-aligned faces, the normal is along one axis
+    abs_n = (abs(n1[1]), abs(n1[2]), abs(n1[3]))
+    if abs_n[1] > 0.5  # normal along x
+        ax1, ax2 = 2, 3  # project onto y-z plane
+    elseif abs_n[2] > 0.5  # normal along y
+        ax1, ax2 = 1, 3  # project onto x-z plane
+    else  # normal along z
+        ax1, ax2 = 1, 2  # project onto x-y plane
+    end
+
+    # Get bounding intervals of each face in the 2D projection
+    corners1 = (a1, b1, c1, d1)
+    corners2 = (a2, b2, c2, d2)
+
+    min1_u = minimum(c[ax1] for c in corners1)
+    max1_u = maximum(c[ax1] for c in corners1)
+    min1_v = minimum(c[ax2] for c in corners1)
+    max1_v = maximum(c[ax2] for c in corners1)
+
+    min2_u = minimum(c[ax1] for c in corners2)
+    max2_u = maximum(c[ax1] for c in corners2)
+    min2_v = minimum(c[ax2] for c in corners2)
+    max2_v = maximum(c[ax2] for c in corners2)
+
+    # Compute overlap interval
+    lo_u = max(min1_u, min2_u)
+    hi_u = min(max1_u, max2_u)
+    lo_v = max(min1_v, min2_v)
+    hi_v = min(max1_v, max2_v)
+
+    if hi_u - lo_u < tol || hi_v - lo_v < tol
+        return false, nothing
+    end
+
+    # Reconstruct 3D corners of overlap rectangle
+    # The coordinate along the normal axis is the same for all points on the plane
+    normal_ax = findfirst(x -> x > 0.5, abs_n)
+    plane_coord = a1[normal_ax]
+
+    function make_point(u::T, v::T)
+        p = zeros(T, 3)
+        p[ax1] = u
+        p[ax2] = v
+        p[normal_ax] = plane_coord
+        return NTuple{3, T}(Tuple(p))
+    end
+
+    # Corners in anti-clockwise order when viewed from the direction of n1
+    # We need to figure out the winding. Use the same convention as face1.
+    # face1 goes a1 -> b1 -> c1 -> d1 anti-clockwise.
+    # edge a1->b1 direction
+    e_ab = (b1[ax1] - a1[ax1], b1[ax2] - a1[ax2])
+    # edge a1->d1 direction
+    e_ad = (d1[ax1] - a1[ax1], d1[ax2] - a1[ax2])
+
+    # Determine corner ordering based on face1's winding
+    u_start = (e_ab[1] >= 0) ? lo_u : hi_u
+    u_end = (e_ab[1] >= 0) ? hi_u : lo_u
+    v_start = (e_ad[2] >= 0) ? lo_v : hi_v
+    v_end = (e_ad[2] >= 0) ? hi_v : lo_v
+
+    # But actually for axis-aligned rects, let's just pick a consistent winding
+    # matching the face1 winding direction
+    if abs(e_ab[1]) > tol  # a->b is along ax1
+        oa = make_point(u_start, v_start)
+        ob = make_point(u_end, v_start)
+        oc = make_point(u_end, v_end)
+        od = make_point(u_start, v_end)
+    else  # a->b is along ax2
+        oa = make_point(u_start, v_start)
+        ob = make_point(u_start, v_end)
+        oc = make_point(u_end, v_end)
+        od = make_point(u_end, v_start)
+    end
+
+    return true, (oa, ob, oc, od)
+end
+
 function _box3d_rhs_adaptive_initial_panels(Lx::T, Ly::T, Lz::T, alpha::T) where T
     vertices, faces, normals = _box3d_geometry(Lx, Ly, Lz)
 
