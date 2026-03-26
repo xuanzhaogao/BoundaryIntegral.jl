@@ -13,9 +13,19 @@ struct FlatPanel{T, D} <: AbstractPanel
     gl_xs::Vector{T}
     gl_ws::Vector{T}
 
-    # quadrature points and weightsnorm(lhs * x - rhs)
+    # quadrature points and weights
     points::Vector{NTuple{D, T}}
     weights::Vector{T}
+
+    # monomial coefficients for Lagrange basis polynomials on GL nodes
+    # mono_coeffs[j, k] = coefficient of x^(k-1) in L_j(x), size n_quad × n_quad
+    mono_coeffs::Matrix{T}
+end
+
+# Convenience constructor: computes mono_coeffs automatically
+function FlatPanel(normal::NTuple{D,T}, corners, is_edge, n_quad, gl_xs, gl_ws, points, weights) where {T, D}
+    mono_coeffs = lagrange_mono_coeffs(gl_xs)
+    return FlatPanel{T,D}(normal, corners, is_edge, n_quad, gl_xs, gl_ws, points, weights, mono_coeffs)
 end
 
 Base.show(io::IO, p::FlatPanel{T, D}) where {T, D} = print(io, "FlatPanel in $D-dimensional space, with $(p.n_quad) quadrature points in $T")
@@ -118,8 +128,8 @@ struct PanelRhsInterp{T}
     inv12::T
     inv22::T
     scale::T
-    ns::Vector{T}
-    λ::Vector{T}
+    n_quad::Int
+    mono_coeffs::Matrix{T}
     vals::Matrix{T}
 end
 
@@ -144,9 +154,6 @@ function interface_approx(interface::DielectricInterface{FlatPanel{T, 3}, T}, va
     centers = Matrix{T}(undef, 3, n_panels)
     offset = 0
     for (i, panel) in enumerate(interface.panels)
-        ns = panel.gl_xs
-        ws = panel.gl_ws
-        λ = gl_barycentric_weights(ns, ws)
         a, b, c, d = panel.corners
         cc = (a .+ b .+ c .+ d) ./ 4
         bma = b .- a
@@ -171,7 +178,7 @@ function interface_approx(interface::DielectricInterface{FlatPanel{T, 3}, T}, va
         end
         offset += n_quad * n_quad
 
-        interps[i] = PanelRhsInterp(cc, bma, dma, inv11, inv12, inv22, scale, ns, λ, vals)
+        interps[i] = PanelRhsInterp(cc, bma, dma, inv11, inv12, inv22, scale, n_quad, panel.mono_coeffs, vals)
         centers[1, i] = cc[1]
         centers[2, i] = cc[2]
         centers[3, i] = cc[3]
@@ -186,11 +193,14 @@ function interface_approx(interface::DielectricInterface{FlatPanel{T, 3}, T}, va
             interp = interps[idx]
             u, v, hit = _panel_uv(interp, p, tol)
             if hit
-                rx = T.(barycentric_row(interp.ns, interp.λ, u))
-                ry = T.(barycentric_row(interp.ns, interp.λ, v))
+                nq = interp.n_quad
+                rx = Vector{T}(undef, nq)
+                ry = Vector{T}(undef, nq)
+                eval_lagrange_horner!(rx, interp.mono_coeffs, u)
+                eval_lagrange_horner!(ry, interp.mono_coeffs, v)
                 val = zero(T)
-                for ii in eachindex(interp.ns)
-                    for jj in eachindex(interp.ns)
+                for ii in 1:nq
+                    for jj in 1:nq
                         val += interp.vals[ii, jj] * rx[ii] * ry[jj]
                     end
                 end
@@ -200,11 +210,14 @@ function interface_approx(interface::DielectricInterface{FlatPanel{T, 3}, T}, va
         for interp in interps
             u, v, hit = _panel_uv(interp, p, tol)
             if hit
-                rx = T.(barycentric_row(interp.ns, interp.λ, u))
-                ry = T.(barycentric_row(interp.ns, interp.λ, v))
+                nq = interp.n_quad
+                rx = Vector{T}(undef, nq)
+                ry = Vector{T}(undef, nq)
+                eval_lagrange_horner!(rx, interp.mono_coeffs, u)
+                eval_lagrange_horner!(ry, interp.mono_coeffs, v)
                 val = zero(T)
-                for ii in eachindex(interp.ns)
-                    for jj in eachindex(interp.ns)
+                for ii in 1:nq
+                    for jj in 1:nq
                         val += interp.vals[ii, jj] * rx[ii] * ry[jj]
                     end
                 end

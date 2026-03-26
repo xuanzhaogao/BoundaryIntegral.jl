@@ -3,35 +3,84 @@
 # λ_i = (-1)^(n-i) * sqrt((1-x_i^2) w_i / 2)  (up to a global scaling)
 # x must be sorted ascending and wG in the same order.
 # --------------------------
-function gl_barycentric_weights(x::AbstractVector, wG::AbstractVector)
+function gl_barycentric_weights(x::AbstractVector{T}, wG::AbstractVector) where T
     n = length(x)
-    λ = similar(x, Float64)
+    TF = float(T)
+    λ = similar(x, TF)
     for i in 1:n
-        s = (-1)^(n - i)
+        s = iseven(n - i) ? one(TF) : -one(TF)
         λ[i] = s * sqrt((1 - x[i]^2) * wG[i] / 2)
     end
     # optional normalization (does not change the interpolant)
-    λ ./= maximum(abs.(λ))
+    λ ./= maximum(abs, λ)
     return λ
 end
 
-function barycentric_row(x::AbstractVector, λ::AbstractVector, xq::Real)
+function barycentric_row!(r::AbstractVector, x::AbstractVector, λ::AbstractVector, xq::Real)
     n = length(x)
-    r = zeros(Float64, n)
+    T = eltype(r)
 
-    hit = findfirst(i -> isapprox(xq, x[i]), 1:n)   # same as xq ≈ x[i]
-    if hit !== nothing
-        r[hit] = 1.0
-        return r
+    @inbounds for i in 1:n
+        if isapprox(xq, x[i])
+            fill!(r, zero(T))
+            r[i] = one(T)
+            return r
+        end
     end
 
-    denom = 0.0
-    for i in 1:n
-        t = λ[i] / (xq - x[i])
+    denom = zero(T)
+    @inbounds for i in 1:n
+        t = T(λ[i]) / (T(xq) - T(x[i]))
         r[i] = t
         denom += t
     end
-    r ./= denom
+    inv_denom = one(T) / denom
+    @inbounds for i in 1:n
+        r[i] *= inv_denom
+    end
+    return r
+end
+
+function barycentric_row(x::AbstractVector, λ::AbstractVector, xq::Real)
+    T = float(promote_type(eltype(x), eltype(λ), typeof(xq)))
+    r = Vector{T}(undef, length(x))
+    return barycentric_row!(r, x, λ, xq)
+end
+
+# --------------------------
+# Lagrange-to-monomial coefficient matrix
+# C[j, k] = coefficient of x^(k-1) in L_j(x)
+# Computed as C = (V^T)^{-1} where V is the Vandermonde matrix V[i,k] = x_i^(k-1)
+# --------------------------
+function lagrange_mono_coeffs(x::AbstractVector{T}) where T
+    n = length(x)
+    TF = float(T)
+    # Build Vandermonde matrix: V[i,k] = x[i]^(k-1)
+    V = Matrix{TF}(undef, n, n)
+    @inbounds for i in 1:n
+        V[i, 1] = one(TF)
+        for k in 2:n
+            V[i, k] = V[i, k-1] * TF(x[i])
+        end
+    end
+    # C = (V^{-1})^T, since L_j(x_i) = δ_{ij} means C * V^T = I
+    C = Matrix{TF}(inv(V)')
+    return C
+end
+
+# Evaluate all n Lagrange basis functions at xq using Horner's method
+# with precomputed monomial coefficients C[j,k] = coeff of x^(k-1) in L_j
+function eval_lagrange_horner!(r::AbstractVector, C::Matrix, xq::Real)
+    n = size(C, 1)
+    T = eltype(r)
+    xq_T = T(xq)
+    @inbounds for j in 1:n
+        val = T(C[j, n])
+        for k in (n-1):-1:1
+            val = muladd(val, xq_T, T(C[j, k]))
+        end
+        r[j] = val
+    end
     return r
 end
 

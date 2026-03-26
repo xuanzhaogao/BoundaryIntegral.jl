@@ -24,12 +24,24 @@ end
 
 function laplace3d_DT_panel(panel_src::FlatPanel{T, 3}, panel_trg::FlatPanel{T, 3}) where T
     DT = laplace3d_panel_kernel(panel_src, panel_trg, :DT)
-    return DT * diagm(panel_src.weights)
+    ws = panel_src.weights
+    @inbounds for j in axes(DT, 2)
+        for i in axes(DT, 1)
+            DT[i, j] *= ws[j]
+        end
+    end
+    return DT
 end
 
 function laplace3d_D_panel(panel_src::FlatPanel{T, 3}, panel_trg::FlatPanel{T, 3}) where T
     D = laplace3d_panel_kernel(panel_src, panel_trg, :D)
-    return D * diagm(panel_src.weights)
+    ws = panel_src.weights
+    @inbounds for j in axes(D, 2)
+        for i in axes(D, 1)
+            D[i, j] *= ws[j]
+        end
+    end
+    return D
 end
 
 function laplace3d_panel_upsampled(panel_src::FlatPanel{T, 3}, panel_trg::FlatPanel{T, 3}, n_up::Int, mode::Symbol) where T
@@ -105,10 +117,36 @@ function laplace3d_D_panel_upsampled(panel_src::FlatPanel{T, 3}, panel_trg::Flat
     return laplace3d_panel_upsampled(panel_src, panel_trg, n_up, :D)
 end
 
+function _DT_integrand_hcubature(
+    ::Val{NQ}, C::Matrix{T},
+    cc::NTuple{3,T}, bma::NTuple{3,T}, dma::NTuple{3,T},
+    scale::T, point_trg::NTuple{3,T}, normal_trg::NTuple{3,T}
+) where {NQ, T}
+    N = NQ * NQ
+    rx = MVector{NQ, T}(undef)
+    ry = MVector{NQ, T}(undef)
+    vals = MVector{N, T}(undef)
+    function integrand(x)
+        u = x[1]
+        v = x[2]
+        eval_lagrange_horner!(rx, C, u)
+        eval_lagrange_horner!(ry, C, v)
+        p = cc .+ bma .* (u / 2) .+ dma .* (v / 2)
+        k = laplace3d_grad(p, point_trg, normal_trg) * scale
+        idx = 1
+        @inbounds for ii in 1:NQ
+            for jj in 1:NQ
+                vals[idx] = k * rx[ii] * ry[jj]
+                idx += 1
+            end
+        end
+        return SVector(vals)
+    end
+    return integrand
+end
+
 function laplace3d_DT_panel_hcubature(panel_src::FlatPanel{T, 3}, panel_trg::FlatPanel{T, 3}, atol::T) where T
-    ns = panel_src.gl_xs
-    ws = panel_src.gl_ws
-    λ = gl_barycentric_weights(ns, ws)
+    C = panel_src.mono_coeffs
     a, b, c, d = panel_src.corners
     cc = (a .+ b .+ c .+ d) ./ 4
     bma = b .- a
@@ -118,35 +156,50 @@ function laplace3d_DT_panel_hcubature(panel_src::FlatPanel{T, 3}, panel_trg::Fla
     scale = Lx * Ly / 4
 
     n_quad = panel_src.n_quad
+    nq_val = Val(n_quad)
     np_trg = num_points(panel_trg)
     DT_exact = zeros(T, np_trg, n_quad * n_quad)
     points_trg = panel_trg.points
     normal_trg = panel_trg.normal
+    lb = SVector{2,T}(-1, -1)
+    ub = SVector{2,T}(1, 1)
 
     Base.Threads.@threads for ti in 1:np_trg
         point_trg = points_trg[ti]
-        function integrand(x)
-            u = x[1]
-            v = x[2]
-            rx = T.(barycentric_row(ns, λ, u))
-            ry = T.(barycentric_row(ns, λ, v))
-            p = cc .+ bma .* (u / 2) .+ dma .* (v / 2)
-            k = laplace3d_grad(p, point_trg, normal_trg) * scale
-            vals = Vector{T}(undef, n_quad * n_quad)
-            idx = 1
-            for ii in 1:n_quad
-                for jj in 1:n_quad
-                    vals[idx] = k * rx[ii] * ry[jj]
-                    idx += 1
-                end
-            end
-            return vals
-        end
-        res, _ = hcubature(integrand, T[-1, -1], T[1, 1]; atol = atol)
+        integrand = _DT_integrand_hcubature(nq_val, C, cc, bma, dma, scale, point_trg, normal_trg)
+        res, _ = hcubature(integrand, lb, ub; atol = atol)
         @views DT_exact[ti, :] .= res
     end
 
     return DT_exact
+end
+
+function _pot_integrand_hcubature(
+    ::Val{NQ}, C::Matrix{T},
+    cc::NTuple{3,T}, bma::NTuple{3,T}, dma::NTuple{3,T},
+    scale::T, target::NTuple{3,T}
+) where {NQ, T}
+    N = NQ * NQ
+    rx = MVector{NQ, T}(undef)
+    ry = MVector{NQ, T}(undef)
+    vals = MVector{N, T}(undef)
+    function integrand(x)
+        u = x[1]
+        v = x[2]
+        eval_lagrange_horner!(rx, C, u)
+        eval_lagrange_horner!(ry, C, v)
+        p = cc .+ bma .* (u / 2) .+ dma .* (v / 2)
+        k = laplace3d_pot(p, target) * scale
+        idx = 1
+        @inbounds for ii in 1:NQ
+            for jj in 1:NQ
+                vals[idx] = k * rx[ii] * ry[jj]
+                idx += 1
+            end
+        end
+        return SVector(vals)
+    end
+    return integrand
 end
 
 function laplace3d_pot_panel_hcubature(
@@ -155,9 +208,7 @@ function laplace3d_pot_panel_hcubature(
     target_ids::Vector{Int},
     atol::T,
 ) where T
-    ns = panel_src.gl_xs
-    ws = panel_src.gl_ws
-    λ = gl_barycentric_weights(ns, ws)
+    C = panel_src.mono_coeffs
     a, b, c, d = panel_src.corners
     cc = (a .+ b .+ c .+ d) ./ 4
     bma = b .- a
@@ -167,32 +218,17 @@ function laplace3d_pot_panel_hcubature(
     scale = Lx * Ly / 4
 
     n_quad = panel_src.n_quad
+    nq_val = Val(n_quad)
     n_src = n_quad * n_quad
     pot_exact = zeros(T, length(target_ids), n_src)
+    lb = SVector{2,T}(-1, -1)
+    ub = SVector{2,T}(1, 1)
 
     Base.Threads.@threads for ti in 1:length(target_ids)
         target_id = target_ids[ti]
         target = (targets[1, target_id], targets[2, target_id], targets[3, target_id])
-
-        function integrand(x)
-            u = x[1]
-            v = x[2]
-            rx = T.(barycentric_row(ns, λ, u))
-            ry = T.(barycentric_row(ns, λ, v))
-            p = cc .+ bma .* (u / 2) .+ dma .* (v / 2)
-            k = laplace3d_pot(p, target) * scale
-            vals = Vector{T}(undef, n_src)
-            idx = 1
-            for ii in 1:n_quad
-                for jj in 1:n_quad
-                    vals[idx] = k * rx[ii] * ry[jj]
-                    idx += 1
-                end
-            end
-            return vals
-        end
-
-        res, _ = hcubature(integrand, T[-1, -1], T[1, 1]; atol = atol)
+        integrand = _pot_integrand_hcubature(nq_val, C, cc, bma, dma, scale, target)
+        res, _ = hcubature(integrand, lb, ub; atol = atol)
         @views pot_exact[ti, :] .= res
     end
 
@@ -337,9 +373,7 @@ function _refined_interface_prolongation(
             continue
         end
 
-        ns = parent_panel.gl_xs
-        ws = parent_panel.gl_ws
-        λ = gl_barycentric_weights(ns, ws)
+        C = parent_panel.mono_coeffs
         n_quad = parent_panel.n_quad
         a, b, c, d = parent_panel.corners
         cc = (a .+ b .+ c .+ d) ./ 4
@@ -352,6 +386,8 @@ function _refined_interface_prolongation(
         inv11 = dd / det
         inv12 = -bd / det
         inv22 = bb / det
+        rx = Vector{T}(undef, n_quad)
+        ry = Vector{T}(undef, n_quad)
 
         for p in panel_ref.points
             row_id += 1
@@ -362,8 +398,8 @@ function _refined_interface_prolongation(
             t = inv12 * rhs1 + inv22 * rhs2
             u = 2 * s
             v = 2 * t
-            rx = T.(barycentric_row(ns, λ, u))
-            ry = T.(barycentric_row(ns, λ, v))
+            eval_lagrange_horner!(rx, C, u)
+            eval_lagrange_horner!(ry, C, v)
             for ii in 1:n_quad
                 for jj in 1:n_quad
                     col_id = col0 + (ii - 1) * n_quad + jj
@@ -810,6 +846,9 @@ function laplace3d_pottrg_near(interface::DielectricInterface{P, T}, target::NTu
     offsets = cumsum(vcat(0, panel_counts))
     @assert offsets[end] == length(sol)
 
+    lb = SVector{2,T}(-1, -1)
+    ub = SVector{2,T}(1, 1)
+
     val = zero(T)
     for (i, panel) in enumerate(interface.panels)
         n_quad = panel.n_quad
@@ -829,18 +868,18 @@ function laplace3d_pottrg_near(interface::DielectricInterface{P, T}, target::NTu
                 val += sol_panel[j] * point.weight * laplace3d_pot(point.point, target)
             end
         else
-            ns = panel.gl_xs
-            ws = panel.gl_ws
-            λ = gl_barycentric_weights(ns, ws)
+            C = panel.mono_coeffs
             bma = b .- a
             dma = d .- a
             scale = Lx * Ly / 4
+            rx = Vector{T}(undef, n_quad)
+            ry = Vector{T}(undef, n_quad)
 
             function integrand(x)
                 u = x[1]
                 v = x[2]
-                rx = barycentric_row(ns, λ, u)
-                ry = barycentric_row(ns, λ, v)
+                eval_lagrange_horner!(rx, C, u)
+                eval_lagrange_horner!(ry, C, v)
                 dens = zero(T)
                 idx = 1
                 for ii in 1:n_quad
@@ -853,7 +892,7 @@ function laplace3d_pottrg_near(interface::DielectricInterface{P, T}, target::NTu
                 return dens * laplace3d_pot(p, target) * scale
             end
 
-            res, _ = hcubature(integrand, T[-1, -1], T[1, 1]; atol = atol)
+            res, _ = hcubature(integrand, lb, ub; atol = atol)
             val += res
         end
     end
