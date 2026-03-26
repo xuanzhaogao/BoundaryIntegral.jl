@@ -259,6 +259,37 @@ function _box3d_face_quads(Lx::T, Ly::T, Lz::T) where T
     return quads, face_normals
 end
 
+# Generate 6 faces of an axis-aligned box centered at `center` with dimensions Lx x Ly x Lz.
+# Each face is returned as (a, b, c, d, normal) where a,b,c,d are corners in anti-clockwise order
+# and normal points outward.
+function _box3d_faces_at_center(center::NTuple{3, T}, Lx::T, Ly::T, Lz::T) where T
+    cx, cy, cz = center
+    hx, hy, hz = Lx / 2, Ly / 2, Lz / 2
+    t0 = zero(T)
+    t1 = one(T)
+
+    # vertices (same ordering as _box3d_geometry, but offset by center)
+    v1 = (cx + hx, cy + hy, cz + hz)
+    v2 = (cx - hx, cy + hy, cz + hz)
+    v3 = (cx - hx, cy - hy, cz + hz)
+    v4 = (cx + hx, cy - hy, cz + hz)
+    v5 = (cx + hx, cy + hy, cz - hz)
+    v6 = (cx - hx, cy + hy, cz - hz)
+    v7 = (cx - hx, cy - hy, cz - hz)
+    v8 = (cx + hx, cy - hy, cz - hz)
+
+    faces = Tuple{NTuple{3, T}, NTuple{3, T}, NTuple{3, T}, NTuple{3, T}, NTuple{3, T}}[
+        (v1, v2, v3, v4, ( t0,  t0,  t1)),  # z = +hz (top)
+        (v5, v8, v7, v6, ( t0,  t0, -t1)),  # z = -hz (bottom)
+        (v8, v5, v1, v4, ( t1,  t0,  t0)),  # x = +hx (right)
+        (v7, v3, v2, v6, (-t1,  t0,  t0)),  # x = -hx (left)
+        (v6, v2, v1, v5, ( t0,  t1,  t0)),  # y = +hy (front)
+        (v7, v8, v4, v3, ( t0, -t1,  t0)),  # y = -hy (back)
+    ]
+
+    return faces
+end
+
 function _box3d_rhs_adaptive_initial_panels(Lx::T, Ly::T, Lz::T, alpha::T) where T
     vertices, faces, normals = _box3d_geometry(Lx, Ly, Lz)
 
