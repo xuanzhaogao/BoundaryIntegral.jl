@@ -1,9 +1,9 @@
 module BoundaryIntegral
 
-using LinearAlgebra, Statistics
+using LinearAlgebra
 using SparseArrays, StaticArrays
 using FastGaussQuadrature, LegendrePolynomials, SpecialFunctions
-using Krylov, LinearMaps, Roots, HCubature
+using Krylov, LinearMaps, HCubature
 using NearestNeighbors
 using ForwardDiff
 

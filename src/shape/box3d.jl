@@ -726,7 +726,7 @@ function _estimate_source_spacing(vs::VolumeSource{T, 3}) where T
         h = min(h, T(dists[2]))
     end
     if !isfinite(h) || h <= zero(T)
-        return cbrt(max(mean(abs.(vs.weights)), eps(T)))
+        return cbrt(max(sum(abs, vs.weights) / length(vs.weights), eps(T)))
     end
     return h
 end
