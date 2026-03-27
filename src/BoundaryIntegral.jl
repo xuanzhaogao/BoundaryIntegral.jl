@@ -65,7 +65,11 @@ include("kernel/laplace3d_near.jl")
 
 # # geometries
 include("shape/box2d.jl")
-include("shape/box3d.jl")
+include("shape/box3d.jl") # core types and geometry
+include("shape/box3d_single.jl") # single-box builder
+include("shape/box3d_fmm_helpers.jl") # FMM/TKM helpers (needed by rhs_adaptive)
+include("shape/box3d_rhs_adaptive.jl") # RHS-adaptive builders
+include("shape/box3d_multi.jl") # multi-box builders
 
 # # utilities
 include("utils/linear_algebra.jl")

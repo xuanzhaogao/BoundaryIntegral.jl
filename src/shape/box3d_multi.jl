@@ -1,0 +1,428 @@
+# Generate 6 faces of an axis-aligned box centered at `center` with dimensions Lx x Ly x Lz.
+# Each face is returned as (a, b, c, d, normal) where a,b,c,d are corners in anti-clockwise order
+# and normal points outward.
+function _box3d_faces_at_center(center::NTuple{3, T}, Lx::T, Ly::T, Lz::T) where T
+    cx, cy, cz = center
+    hx, hy, hz = Lx / 2, Ly / 2, Lz / 2
+    t0 = zero(T)
+    t1 = one(T)
+
+    # vertices (same ordering as _box3d_geometry, but offset by center)
+    v1 = (cx + hx, cy + hy, cz + hz)
+    v2 = (cx - hx, cy + hy, cz + hz)
+    v3 = (cx - hx, cy - hy, cz + hz)
+    v4 = (cx + hx, cy - hy, cz + hz)
+    v5 = (cx + hx, cy + hy, cz - hz)
+    v6 = (cx - hx, cy + hy, cz - hz)
+    v7 = (cx - hx, cy - hy, cz - hz)
+    v8 = (cx + hx, cy - hy, cz - hz)
+
+    faces = Tuple{NTuple{3, T}, NTuple{3, T}, NTuple{3, T}, NTuple{3, T}, NTuple{3, T}}[
+        (v1, v2, v3, v4, ( t0,  t0,  t1)),  # z = +hz (top)
+        (v5, v8, v7, v6, ( t0,  t0, -t1)),  # z = -hz (bottom)
+        (v8, v5, v1, v4, ( t1,  t0,  t0)),  # x = +hx (right)
+        (v7, v3, v2, v6, (-t1,  t0,  t0)),  # x = -hx (left)
+        (v6, v2, v1, v5, ( t0,  t1,  t0)),  # y = +hy (front)
+        (v7, v8, v4, v3, ( t0, -t1,  t0)),  # y = -hy (back)
+    ]
+
+    return faces
+end
+
+# Check if two axis-aligned 3D rectangular faces overlap.
+# Requirements: both faces must be co-planar (same plane) and have opposite normals.
+# Returns (has_overlap::Bool, region) where region is (a, b, c, d) corners of the overlap rectangle.
+# The overlap rectangle's normal is taken from face1.
+function _rect_overlap_3d(
+    a1::NTuple{3, T}, b1::NTuple{3, T}, c1::NTuple{3, T}, d1::NTuple{3, T}, n1::NTuple{3, T},
+    a2::NTuple{3, T}, b2::NTuple{3, T}, c2::NTuple{3, T}, d2::NTuple{3, T}, n2::NTuple{3, T};
+    tol::T = T(1e-10)
+) where T
+    # Check opposite normals
+    if norm(n1 .+ n2) > tol
+        return false, nothing
+    end
+
+    # Check co-planarity: all corners of face2 must lie on the plane of face1
+    # plane equation: dot(n1, p - a1) = 0
+    for p in (a2, b2, c2, d2)
+        if abs(dot(n1, p .- a1)) > tol
+            return false, nothing
+        end
+    end
+
+    # Project onto 2D: find the two tangential axes
+    # For axis-aligned faces, the normal is along one axis
+    abs_n = (abs(n1[1]), abs(n1[2]), abs(n1[3]))
+    if abs_n[1] > 0.5  # normal along x
+        ax1, ax2 = 2, 3  # project onto y-z plane
+    elseif abs_n[2] > 0.5  # normal along y
+        ax1, ax2 = 1, 3  # project onto x-z plane
+    else  # normal along z
+        ax1, ax2 = 1, 2  # project onto x-y plane
+    end
+
+    # Get bounding intervals of each face in the 2D projection
+    corners1 = (a1, b1, c1, d1)
+    corners2 = (a2, b2, c2, d2)
+
+    min1_u = minimum(c[ax1] for c in corners1)
+    max1_u = maximum(c[ax1] for c in corners1)
+    min1_v = minimum(c[ax2] for c in corners1)
+    max1_v = maximum(c[ax2] for c in corners1)
+
+    min2_u = minimum(c[ax1] for c in corners2)
+    max2_u = maximum(c[ax1] for c in corners2)
+    min2_v = minimum(c[ax2] for c in corners2)
+    max2_v = maximum(c[ax2] for c in corners2)
+
+    # Compute overlap interval
+    lo_u = max(min1_u, min2_u)
+    hi_u = min(max1_u, max2_u)
+    lo_v = max(min1_v, min2_v)
+    hi_v = min(max1_v, max2_v)
+
+    if hi_u - lo_u < tol || hi_v - lo_v < tol
+        return false, nothing
+    end
+
+    # Reconstruct 3D corners of overlap rectangle
+    # The coordinate along the normal axis is the same for all points on the plane
+    normal_ax = findfirst(x -> x > 0.5, abs_n)
+    plane_coord = a1[normal_ax]
+
+    function make_point(u::T, v::T)
+        p = zeros(T, 3)
+        p[ax1] = u
+        p[ax2] = v
+        p[normal_ax] = plane_coord
+        return NTuple{3, T}(Tuple(p))
+    end
+
+    # Corners in anti-clockwise order when viewed from the direction of n1
+    # We need to figure out the winding. Use the same convention as face1.
+    # face1 goes a1 -> b1 -> c1 -> d1 anti-clockwise.
+    # edge a1->b1 direction
+    e_ab = (b1[ax1] - a1[ax1], b1[ax2] - a1[ax2])
+    # edge a1->d1 direction
+    e_ad = (d1[ax1] - a1[ax1], d1[ax2] - a1[ax2])
+
+    # Determine corner ordering based on face1's winding
+    if abs(e_ab[1]) > tol  # a->b is along ax1
+        u_start = (e_ab[1] >= 0) ? lo_u : hi_u
+        u_end   = (e_ab[1] >= 0) ? hi_u : lo_u
+        v_start = (e_ad[2] >= 0) ? lo_v : hi_v
+        v_end   = (e_ad[2] >= 0) ? hi_v : lo_v
+        oa = make_point(u_start, v_start)
+        ob = make_point(u_end, v_start)
+        oc = make_point(u_end, v_end)
+        od = make_point(u_start, v_end)
+    else  # a->b is along ax2
+        u_start = (e_ad[1] >= 0) ? lo_u : hi_u
+        u_end   = (e_ad[1] >= 0) ? hi_u : lo_u
+        v_start = (e_ab[2] >= 0) ? lo_v : hi_v
+        v_end   = (e_ab[2] >= 0) ? hi_v : lo_v
+        oa = make_point(u_start, v_start)
+        ob = make_point(u_start, v_end)
+        oc = make_point(u_end, v_end)
+        od = make_point(u_end, v_start)
+    end
+
+    return true, (oa, ob, oc, od)
+end
+
+# Detect all shared faces between pairs of axis-aligned boxes.
+# Returns a vector of (region, id_lo, id_hi, normal) where:
+#   region = (a, b, c, d) corners of the shared rectangle
+#   id_lo < id_hi are box indices
+#   normal points from box id_hi toward box id_lo
+function _detect_shared_faces_3d(boxes::Vector{<:NamedTuple})
+    T = typeof(boxes[1].Lx)
+    shared = Tuple{NTuple{4, NTuple{3, T}}, Int, Int, NTuple{3, T}}[]
+
+    n_boxes = length(boxes)
+    for i in 1:n_boxes
+        faces_i = _box3d_faces_at_center(boxes[i].center, boxes[i].Lx, boxes[i].Ly, boxes[i].Lz)
+        for j in (i + 1):n_boxes
+            faces_j = _box3d_faces_at_center(boxes[j].center, boxes[j].Lx, boxes[j].Ly, boxes[j].Lz)
+            for (a1, b1, c1, d1, n1) in faces_i
+                for (a2, b2, c2, d2, n2) in faces_j
+                    has_overlap, region = _rect_overlap_3d(a1, b1, c1, d1, n1, a2, b2, c2, d2, n2)
+                    if has_overlap
+                        # normal points from higher-id box (j) to lower-id box (i)
+                        # n1 is the outward normal of box i's face, which points toward box j.
+                        push!(shared, (region, i, j, (-n1[1], -n1[2], -n1[3])))
+                    end
+                end
+            end
+        end
+    end
+
+    return shared
+end
+
+# Subtract a set of axis-aligned rectangles from an axis-aligned face in 3D.
+# All rectangles must lie on the same plane as the face.
+# Returns a vector of (a, b, c, d) remaining rectangular regions with normal = face normal.
+function _subtract_rects_from_face_3d(
+    a::NTuple{3, T}, b::NTuple{3, T}, c::NTuple{3, T}, d::NTuple{3, T}, normal::NTuple{3, T},
+    shared::Vector{<:NTuple{4, NTuple{3, T}}};
+    tol::T = T(1e-10)
+) where T
+    if isempty(shared)
+        return [(a, b, c, d)]
+    end
+
+    abs_n = (abs(normal[1]), abs(normal[2]), abs(normal[3]))
+    if abs_n[1] > 0.5
+        ax1, ax2 = 2, 3
+    elseif abs_n[2] > 0.5
+        ax1, ax2 = 1, 3
+    else
+        ax1, ax2 = 1, 2
+    end
+    normal_ax = findfirst(x -> x > 0.5, abs_n)
+    plane_coord = a[normal_ax]
+
+    # Face bounding box in 2D
+    corners_face = (a, b, c, d)
+    face_u_min = minimum(p[ax1] for p in corners_face)
+    face_u_max = maximum(p[ax1] for p in corners_face)
+    face_v_min = minimum(p[ax2] for p in corners_face)
+    face_v_max = maximum(p[ax2] for p in corners_face)
+
+    # Collect all u and v coordinates from face and shared regions
+    u_coords = T[face_u_min, face_u_max]
+    v_coords = T[face_v_min, face_v_max]
+    for rect in shared
+        for corner in rect
+            push!(u_coords, corner[ax1])
+            push!(v_coords, corner[ax2])
+        end
+    end
+    sort!(unique!(u_coords))
+    sort!(unique!(v_coords))
+
+    # Filter to within face bounds
+    filter!(u -> face_u_min - tol <= u <= face_u_max + tol, u_coords)
+    filter!(v -> face_v_min - tol <= v <= face_v_max + tol, v_coords)
+
+    function make_point_3d(u::T, v::T)
+        p = zeros(T, 3)
+        p[ax1] = u
+        p[ax2] = v
+        p[normal_ax] = plane_coord
+        return NTuple{3, T}(Tuple(p))
+    end
+
+    # Check if a 2D cell center is inside any shared rectangle
+    function is_shared(u_mid::T, v_mid::T)
+        for rect in shared
+            rect_u_min = minimum(p[ax1] for p in rect)
+            rect_u_max = maximum(p[ax1] for p in rect)
+            rect_v_min = minimum(p[ax2] for p in rect)
+            rect_v_max = maximum(p[ax2] for p in rect)
+            if rect_u_min - tol <= u_mid <= rect_u_max + tol &&
+               rect_v_min - tol <= v_mid <= rect_v_max + tol
+                return true
+            end
+        end
+        return false
+    end
+
+    remaining = NTuple{4, NTuple{3, T}}[]
+
+    for i in 1:(length(u_coords) - 1)
+        for j in 1:(length(v_coords) - 1)
+            u_lo, u_hi = u_coords[i], u_coords[i + 1]
+            v_lo, v_hi = v_coords[j], v_coords[j + 1]
+
+            if u_hi - u_lo < tol || v_hi - v_lo < tol
+                continue
+            end
+
+            u_mid = (u_lo + u_hi) / 2
+            v_mid = (v_lo + v_hi) / 2
+
+            if !is_shared(u_mid, v_mid)
+                # Build corners with same winding as original face
+                ra = make_point_3d(u_lo, v_lo)
+                rb = make_point_3d(u_hi, v_lo)
+                rc = make_point_3d(u_hi, v_hi)
+                rd = make_point_3d(u_lo, v_hi)
+                push!(remaining, (ra, rb, rc, rd))
+            end
+        end
+    end
+
+    return remaining
+end
+
+# Compute all face regions for a multi-box system.
+# Returns a vector of (a, b, c, d, normal, eps_in, eps_out) for each face region
+# (both external and shared).
+function _multi_box3d_face_regions(
+    boxes::Vector{<:NamedTuple},
+    epses::Vector{T},
+    eps_out::T,
+) where T
+    shared_faces = _detect_shared_faces_3d(boxes)
+    n_boxes = length(boxes)
+
+    regions = Tuple{NTuple{3,T}, NTuple{3,T}, NTuple{3,T}, NTuple{3,T}, NTuple{3,T}, T, T}[]
+
+    for box_id in 1:n_boxes
+        box = boxes[box_id]
+        faces = _box3d_faces_at_center(box.center, box.Lx, box.Ly, box.Lz)
+
+        for (fa, fb, fc, fd, fn) in faces
+            face_shared = NTuple{4, NTuple{3, T}}[]
+            for (region, id_lo, id_hi, normal) in shared_faces
+                if box_id == id_lo || box_id == id_hi
+                    has_ov, ov_region = _rect_overlap_3d(
+                        fa, fb, fc, fd, fn,
+                        region[1], region[2], region[3], region[4], (-fn[1], -fn[2], -fn[3]),
+                    )
+                    if has_ov
+                        push!(face_shared, ov_region)
+                    end
+                end
+            end
+
+            remaining = _subtract_rects_from_face_3d(fa, fb, fc, fd, fn, face_shared)
+            for (ra, rb, rc, rd) in remaining
+                push!(regions, (ra, rb, rc, rd, fn, epses[box_id], eps_out))
+            end
+        end
+    end
+
+    for (region, id_lo, id_hi, normal) in shared_faces
+        a, b, c, d = region
+        push!(regions, (a, b, c, d, normal, epses[id_hi], epses[id_lo]))
+    end
+
+    return regions
+end
+
+function multi_dielectric_box3d(
+    n_quad::Int, l_ec::T,
+    boxes::Vector{<:NamedTuple},
+    epses::Vector{T},
+    eps_out::T = one(T);
+    alpha::T = T(sqrt(T(2)))
+) where T
+    @assert length(boxes) == length(epses) "Number of boxes must match number of permittivities"
+    @assert length(boxes) >= 1 "At least one box is required"
+
+    ns, ws = gausslegendre(n_quad)
+    ns = T.(ns)
+    ws = T.(ws)
+
+    regions = _multi_box3d_face_regions(boxes, epses, eps_out)
+
+    panels_vec = Vector{FlatPanel{T, 3}}()
+    eps_in_vec = Vector{T}()
+    eps_out_vec = Vector{T}()
+
+    is_edge = (true, true, true, true)
+    is_corner = (true, true, true, true)
+
+    for (ra, rb, rc, rd, fn, ei, eo) in regions
+        new_panels = rect_panel3d_adaptive_panels(ra, rb, rc, rd, ns, ws, fn, is_edge, is_corner, alpha, l_ec)
+        append!(panels_vec, new_panels)
+        append!(eps_in_vec, fill(ei, length(new_panels)))
+        append!(eps_out_vec, fill(eo, length(new_panels)))
+    end
+
+    return DielectricInterface(panels_vec, eps_in_vec, eps_out_vec)
+end
+
+function multi_dielectric_box3d_rhs_adaptive(
+    n_quad::Int, l_ec::T,
+    boxes::Vector{<:NamedTuple},
+    epses::Vector{T},
+    rhs::Function,
+    rhs_atol::T,
+    eps_out::T = one(T);
+    max_depth::Int = 8,
+    alpha::T = T(sqrt(T(2))),
+) where T
+    @assert length(boxes) == length(epses) "Number of boxes must match number of permittivities"
+    @assert length(boxes) >= 1 "At least one box is required"
+
+    regions = _multi_box3d_face_regions(boxes, epses, eps_out)
+
+    panels_vec = Vector{FlatPanel{T, 3}}()
+    eps_in_vec = Vector{T}()
+    eps_out_vec = Vector{T}()
+
+    is_edge = (true, true, true, true)
+    is_corner = (true, true, true, true)
+
+    for (ra, rb, rc, rd, fn, ei, eo) in regions
+        new_panels = rect_panel3d_rhs_adaptive_panels(
+            ra, rb, rc, rd, n_quad, rhs, fn, is_edge, is_corner, alpha, l_ec, rhs_atol, max_depth;
+        )
+        append!(panels_vec, new_panels)
+        append!(eps_in_vec, fill(ei, length(new_panels)))
+        append!(eps_out_vec, fill(eo, length(new_panels)))
+    end
+
+    return DielectricInterface(panels_vec, eps_in_vec, eps_out_vec)
+end
+
+function multi_dielectric_box3d_rhs_adaptive(
+    n_quad::Int, l_ec::T,
+    boxes::Vector{<:NamedTuple},
+    epses::Vector{T},
+    ps::PointSource{T, 3},
+    eps_src::T,
+    rhs_atol::T,
+    eps_out::T = one(T);
+    max_depth::Int = 100,
+    alpha::T = T(sqrt(T(2))),
+) where T
+    rhs(p, n) = -ps.charge * laplace3d_grad(ps.point, p, n) / eps_src
+    return multi_dielectric_box3d_rhs_adaptive(
+        n_quad, l_ec, boxes, epses, rhs, rhs_atol, eps_out;
+        max_depth = max_depth, alpha = alpha,
+    )
+end
+
+function multi_dielectric_box3d_rhs_adaptive(
+    n_quad::Int, l_ec::T,
+    boxes::Vector{<:NamedTuple},
+    epses::Vector{T},
+    vs::VolumeSource{T, 3},
+    eps_src::T,
+    rhs_atol::T,
+    eps_out::T = one(T);
+    max_depth::Int = 100,
+    alpha::T = T(sqrt(T(2))),
+    tkm_kmax::Union{Nothing, T} = nothing,
+) where T
+    @assert length(boxes) == length(epses) "Number of boxes must match number of permittivities"
+    @assert length(boxes) >= 1 "At least one box is required"
+
+    regions = _multi_box3d_face_regions(boxes, epses, eps_out)
+
+    panels_vec = Vector{FlatPanel{T, 3}}()
+    eps_in_vec = Vector{T}()
+    eps_out_vec = Vector{T}()
+
+    is_edge = (true, true, true, true)
+    is_corner = (true, true, true, true)
+
+    resolved_tkm_kmax = isnothing(tkm_kmax) ? _estimate_tkm3dc_kmax(vs) : tkm_kmax
+
+    for (ra, rb, rc, rd, fn, ei, eo) in regions
+        new_panels = rect_panel3d_rhs_adaptive_panels(
+            ra, rb, rc, rd, n_quad, vs, eps_src, fn, is_edge, is_corner, alpha, l_ec, rhs_atol, max_depth, resolved_tkm_kmax;
+        )
+        append!(panels_vec, new_panels)
+        append!(eps_in_vec, fill(ei, length(new_panels)))
+        append!(eps_out_vec, fill(eo, length(new_panels)))
+    end
+
+    return DielectricInterface(panels_vec, eps_in_vec, eps_out_vec)
+end
