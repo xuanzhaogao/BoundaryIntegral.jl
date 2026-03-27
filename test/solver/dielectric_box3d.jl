@@ -9,9 +9,9 @@ using Test
     eps_box = 4.0
     interface = BI.single_dielectric_box3d(1.2, 0.8, 0.6, 4, 0.2, eps_box, 1.0, Float64; alpha = sqrt(2))
 
-    lhs = BI.Lhs_dielectric_box3d(interface)
-    lhs_fmm3d = BI.Lhs_dielectric_box3d_fmm3d(interface, 1e-12)
-    rhs = BI.Rhs_dielectric_box3d(interface, BI.PointSource((0.1, 0.1, 0.1), 1.0), eps_box)
+    lhs = BI.lhs_dielectric_box3d(interface)
+    lhs_fmm3d = BI.lhs_dielectric_box3d_fmm3d(interface, 1e-12)
+    rhs = BI.rhs_dielectric_box3d(interface, BI.PointSource((0.1, 0.1, 0.1), 1.0), eps_box)
     ws = BI.all_weights(interface)
 
     x = BI.solve_lu(lhs, rhs)
@@ -56,9 +56,9 @@ end
     eps_box = 4.0
     interface = BI.single_dielectric_box3d(3.0, 3.0, 1.0, 6, 0.2, eps_box, 1.0, Float64; alpha = sqrt(2))
 
-    lhs_uncorrected = BI.Lhs_dielectric_box3d_fmm3d(interface, 1e-6)
-    lhs_corrected = BI.Lhs_dielectric_box3d_fmm3d_corrected(interface, 1e-6, 1e-6, 12)
-    rhs = BI.Rhs_dielectric_box3d(interface, BI.PointSource((0.1, 0.1, 0.1), 1.0), eps_box)
+    lhs_uncorrected = BI.lhs_dielectric_box3d_fmm3d(interface, 1e-6)
+    lhs_corrected = BI.lhs_dielectric_box3d_fmm3d_corrected(interface, 1e-6, 1e-6, 12)
+    rhs = BI.rhs_dielectric_box3d(interface, BI.PointSource((0.1, 0.1, 0.1), 1.0), eps_box)
     ws = BI.all_weights(interface)
 
     x_gmres_corrected = BI.solve_gmres(lhs_corrected, rhs, 1e-6, 1e-6)
@@ -89,8 +89,8 @@ end
         Float64;
         max_depth = 2,
     )
-    lhs = BI.Lhs_dielectric_box3d(interface)
-    rhs = BI.Rhs_dielectric_box3d(interface, ps, eps_box)
+    lhs = BI.lhs_dielectric_box3d(interface)
+    rhs = BI.rhs_dielectric_box3d(interface, ps, eps_box)
     x = BI.solve_gmres(lhs, rhs, 1e-6, 1e-6)
     @test norm(lhs * x - rhs) < 1e-5
     @test abs(dot(BI.all_weights(interface), x) +  1.0 / eps_box - 1.0) < 1e-2
@@ -110,8 +110,8 @@ end
         Float64;
         max_depth = 2,
     )
-    lhs = BI.Lhs_dielectric_box3d(interface)
-    rhs = BI.Rhs_dielectric_box3d(interface, ps, 1.0)
+    lhs = BI.lhs_dielectric_box3d(interface)
+    rhs = BI.rhs_dielectric_box3d(interface, ps, 1.0)
     x = BI.solve_gmres(lhs, rhs, 1e-6, 1e-6)
     @test norm(lhs * x - rhs) < 1e-5
     @test abs(dot(BI.all_weights(interface), x)) < 1e-2
@@ -129,7 +129,7 @@ end
     density = fill(1.0, 2, 2, 2)
     vs = BI.VolumeSource{Float64, 3}((xs, ys, zs), weights, density)
 
-    rhs_direct = BI.Rhs_dielectric_box3d(interface, vs, eps_src)
+    rhs_direct = BI.rhs_dielectric_box3d(interface, vs, eps_src)
     rhs_manual = zeros(Float64, BI.num_points(interface))
     for (i, point) in enumerate(BI.eachpoint(interface))
         acc = 0.0
@@ -142,7 +142,7 @@ end
     end
     @test norm(rhs_direct - rhs_manual) <= 1e-12
 
-    rhs_fmm = BI.Rhs_dielectric_box3d_fmm3d(interface, vs, eps_src, 1e-8)
+    rhs_fmm = BI.rhs_dielectric_box3d_fmm3d(interface, vs, eps_src, 1e-8)
     @test norm(rhs_fmm - rhs_direct) / norm(rhs_direct) < 1e-6
 end
 
@@ -162,7 +162,7 @@ end
     @test any(is_near)
     @test !all(is_near)
 
-    rhs_hybrid = BI.Rhs_dielectric_box3d_hybrid(interface, vs, eps_src, 1e-8)
+    rhs_hybrid = BI.rhs_dielectric_box3d_hybrid(interface, vs, eps_src, 1e-8)
 
     # use the analytical results for Gaussian to validate the rhs
     rhs_exact = BI.Rhs_dielectric_box3d_gaussian(interface, (0.0, 0.0, 0.6), 0.1, 1.0)
@@ -230,7 +230,7 @@ end
 
     # RHS convenience overloads use sharp screening internally
     vs_sharp = BI.screened_volume_source(interface, vs_small, BI.SharpScreening())
-    @test BI.Rhs_dielectric_box3d(interface, vs_small) ≈ BI.Rhs_dielectric_box3d(interface, vs_sharp, 1.0)
+    @test BI.rhs_dielectric_box3d(interface, vs_small) ≈ BI.rhs_dielectric_box3d(interface, vs_sharp, 1.0)
 end
 
 @testset "dielectric_box3d volume backend wiring" begin

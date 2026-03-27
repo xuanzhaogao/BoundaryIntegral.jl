@@ -10,9 +10,9 @@ using Test
     for Lx in [1.0, 2.05]
         for Ly in [1.0, 3.03]
             box = BI.single_dielectric_box2d(Lx, Ly, 8, 0.2, 0.05, 5.0, 1.0, Float64)
-            lhs = BI.Lhs_dielectric_box2d(box)
-            lhs_fmm2d = BI.Lhs_dielectric_box2d_fmm2d(box, 1e-12)
-            rhs = BI.Rhs_dielectric_box2d(box, BI.PointSource((0.1, 0.1), 1.0), eps_box)
+            lhs = BI.lhs_dielectric_box2d(box)
+            lhs_fmm2d = BI.lhs_dielectric_box2d_fmm2d(box, 1e-12)
+            rhs = BI.rhs_dielectric_box2d(box, BI.PointSource((0.1, 0.1), 1.0), eps_box)
             ws = BI.all_weights(box)
 
             x = BI.solve_lu(lhs, rhs)
@@ -36,9 +36,9 @@ end
     for (rects, epses) in zip(rects_vec, epses_vec)
         interface = BI.multi_dielectric_box2d(8, 0.2, 0.05, rects, epses)
 
-        lhs = BI.Lhs_dielectric_box2d(interface)
-        lhs_fmm2d = BI.Lhs_dielectric_box2d_fmm2d(interface, 1e-12)
-        rhs = BI.Rhs_dielectric_box2d(interface, BI.PointSource((0.1, 0.1), 1.0), epses[1])
+        lhs = BI.lhs_dielectric_box2d(interface)
+        lhs_fmm2d = BI.lhs_dielectric_box2d_fmm2d(interface, 1e-12)
+        rhs = BI.rhs_dielectric_box2d(interface, BI.PointSource((0.1, 0.1), 1.0), epses[1])
 
         x_trial = randn(BI.num_points(interface))
         @test norm(lhs * x_trial - lhs_fmm2d * x_trial) < 1e-9

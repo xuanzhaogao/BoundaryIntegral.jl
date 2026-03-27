@@ -1,4 +1,4 @@
-function Lhs_dielectric_box2d(interface::DielectricInterface{P, T}) where {P <: AbstractPanel, T}
+function lhs_dielectric_box2d(interface::DielectricInterface{P, T}) where {P <: AbstractPanel, T}
     D_transpose = laplace2d_DT(interface)
     Lhs = D_transpose
     offset = 0
@@ -15,8 +15,9 @@ function Lhs_dielectric_box2d(interface::DielectricInterface{P, T}) where {P <: 
     end
     return Lhs
 end
+const Lhs_dielectric_box2d = lhs_dielectric_box2d # backward compat
 
-function Lhs_dielectric_box2d_fmm2d(interface::DielectricInterface{P, T}, tol::Float64 = 1e-12) where {P <: AbstractPanel, T}
+function lhs_dielectric_box2d_fmm2d(interface::DielectricInterface{P, T}, tol::Float64 = 1e-12) where {P <: AbstractPanel, T}
     D_transpose = laplace2d_DT_fmm2d(interface, tol)
 
     function g(x)
@@ -42,8 +43,9 @@ function Lhs_dielectric_box2d_fmm2d(interface::DielectricInterface{P, T}, tol::F
 
     return Lhs
 end
+const Lhs_dielectric_box2d_fmm2d = lhs_dielectric_box2d_fmm2d # backward compat
 
-function Rhs_dielectric_box2d(interface::DielectricInterface{P, T}, ps::PointSource{T}, eps_src::T) where {P <: AbstractPanel, T}
+function rhs_dielectric_box2d(interface::DielectricInterface{P, T}, ps::PointSource{T}, eps_src::T) where {P <: AbstractPanel, T}
     src = ps.point
     q = ps.charge
     n_points = num_points(interface)
@@ -53,3 +55,4 @@ function Rhs_dielectric_box2d(interface::DielectricInterface{P, T}, ps::PointSou
     end
     return Rhs
 end
+const Rhs_dielectric_box2d = rhs_dielectric_box2d # backward compat

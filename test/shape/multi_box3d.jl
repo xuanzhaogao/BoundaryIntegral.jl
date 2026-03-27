@@ -253,8 +253,8 @@ end
     eps_src = eps_out
 
     # Build LHS and RHS
-    lhs = BI.Lhs_dielectric_box3d(interface)
-    rhs = BI.Rhs_dielectric_box3d(interface, ps, eps_src)
+    lhs = BI.lhs_dielectric_box3d(interface)
+    rhs = BI.rhs_dielectric_box3d(interface, ps, eps_src)
 
     @test size(lhs, 1) == BI.num_points(interface)
     @test size(lhs, 2) == BI.num_points(interface)
@@ -286,8 +286,8 @@ end
         total_weight = sum(BI.all_weights(interface))
         @test total_weight ≈ 29.0 atol = 0.1
 
-        lhs = BI.Lhs_dielectric_box3d(interface)
-        rhs = BI.Rhs_dielectric_box3d(interface, ps, eps_src)
+        lhs = BI.lhs_dielectric_box3d(interface)
+        rhs = BI.rhs_dielectric_box3d(interface, ps, eps_src)
         sigma = lhs \ rhs
         @test all(isfinite.(sigma))
     end

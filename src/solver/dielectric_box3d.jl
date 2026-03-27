@@ -1,4 +1,4 @@
-function Lhs_dielectric_box3d(interface::DielectricInterface{P, T}) where {P <: AbstractPanel, T}
+function lhs_dielectric_box3d(interface::DielectricInterface{P, T}) where {P <: AbstractPanel, T}
     D_transpose = laplace3d_DT(interface)
     Lhs = D_transpose
     offset = 0
@@ -15,8 +15,9 @@ function Lhs_dielectric_box3d(interface::DielectricInterface{P, T}) where {P <: 
     end
     return Lhs
 end
+const Lhs_dielectric_box3d = lhs_dielectric_box3d # backward compat
 
-function Lhs_dielectric_box3d_fmm3d(interface::DielectricInterface{P, T}, tol::Float64 = 1e-6) where {P <: AbstractPanel, T}
+function lhs_dielectric_box3d_fmm3d(interface::DielectricInterface{P, T}, tol::Float64 = 1e-6) where {P <: AbstractPanel, T}
     D_transpose = laplace3d_DT_fmm3d(interface, tol)
 
     function g(x)
@@ -41,9 +42,10 @@ function Lhs_dielectric_box3d_fmm3d(interface::DielectricInterface{P, T}, tol::F
     Lhs = LinearMap{T}(g, num_points(interface), num_points(interface))
     return Lhs
 end
+const Lhs_dielectric_box3d_fmm3d = lhs_dielectric_box3d_fmm3d # backward compat
 
 # linear operator for the corrected DT kernel
-function Lhs_dielectric_box3d_fmm3d_corrected(
+function lhs_dielectric_box3d_fmm3d_corrected(
     interface::DielectricInterface{P, Float64},
     fmm_tol::Float64,
     up_tol::Float64,
@@ -82,9 +84,9 @@ function Lhs_dielectric_box3d_fmm3d_corrected(
 
     return LinearMap{Float64}(apply_operator, n_points, n_points)
 end
+const Lhs_dielectric_box3d_fmm3d_corrected = lhs_dielectric_box3d_fmm3d_corrected # backward compat
 
-
-function Rhs_dielectric_box3d(interface::DielectricInterface{P, T}, ps::PointSource{T, 3}, eps_src::T) where {P <: AbstractPanel, T}
+function rhs_dielectric_box3d(interface::DielectricInterface{P, T}, ps::PointSource{T, 3}, eps_src::T) where {P <: AbstractPanel, T}
     src = ps.point
     q = ps.charge
     n_points = num_points(interface)
@@ -95,7 +97,7 @@ function Rhs_dielectric_box3d(interface::DielectricInterface{P, T}, ps::PointSou
     return Rhs
 end
 
-function Rhs_dielectric_box3d(interface::DielectricInterface{P, T}, vs::VolumeSource{T, 3}, eps_src::T) where {P <: AbstractPanel, T}
+function rhs_dielectric_box3d(interface::DielectricInterface{P, T}, vs::VolumeSource{T, 3}, eps_src::T) where {P <: AbstractPanel, T}
     positions = vs.positions
     n_points = num_points(interface)
     Rhs = zeros(T, n_points)
@@ -111,11 +113,12 @@ function Rhs_dielectric_box3d(interface::DielectricInterface{P, T}, vs::VolumeSo
     return Rhs
 end
 
-function Rhs_dielectric_box3d(interface::DielectricInterface{P, T}, vs::VolumeSource{T, 3}) where {T, P <: FlatPanel{T, 3}}
-    return Rhs_dielectric_box3d(interface, screened_volume_source(interface, vs, SharpScreening()), one(T))
+function rhs_dielectric_box3d(interface::DielectricInterface{P, T}, vs::VolumeSource{T, 3}) where {T, P <: FlatPanel{T, 3}}
+    return rhs_dielectric_box3d(interface, screened_volume_source(interface, vs, SharpScreening()), one(T))
 end
+const Rhs_dielectric_box3d = rhs_dielectric_box3d # backward compat
 
-function Rhs_dielectric_box3d_fmm3d(
+function rhs_dielectric_box3d_fmm3d(
     interface::DielectricInterface{P, Float64},
     vs::VolumeSource{Float64, 3},
     eps_src::Float64,
@@ -150,15 +153,16 @@ function Rhs_dielectric_box3d_fmm3d(
     return Rhs
 end
 
-function Rhs_dielectric_box3d_fmm3d(
+function rhs_dielectric_box3d_fmm3d(
     interface::DielectricInterface{P, Float64},
     vs::VolumeSource{Float64, 3},
     thresh::Float64,
 ) where {P <: FlatPanel{Float64, 3}}
-    return Rhs_dielectric_box3d_fmm3d(interface, screened_volume_source(interface, vs, SharpScreening()), 1.0, thresh)
+    return rhs_dielectric_box3d_fmm3d(interface, screened_volume_source(interface, vs, SharpScreening()), 1.0, thresh)
 end
+const Rhs_dielectric_box3d_fmm3d = rhs_dielectric_box3d_fmm3d # backward compat
 
-function Rhs_dielectric_box3d_hybrid(
+function rhs_dielectric_box3d_hybrid(
     interface::DielectricInterface{P, Float64},
     vs::VolumeSource{Float64, 3},
     eps_src::Float64,
@@ -200,6 +204,7 @@ function Rhs_dielectric_box3d_hybrid(
     )
 
     @info "rhs box3d hybrid evaluation, source points: $n_sources, near targets: $n_near, far targets: $n_far"
-    # Match the sign convention used by Rhs_dielectric_box3d / Rhs_dielectric_box3d_fmm3d.
+    # Match the sign convention used by rhs_dielectric_box3d / rhs_dielectric_box3d_fmm3d.
     return -rhs
 end
+const Rhs_dielectric_box3d_hybrid = rhs_dielectric_box3d_hybrid # backward compat
