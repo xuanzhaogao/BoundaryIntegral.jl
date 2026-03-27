@@ -242,3 +242,30 @@ end
         @test total_weight ≈ 16.0 atol = 0.01
     end
 end
+
+@testset "multi_dielectric_box3d solver integration" begin
+    boxes = [
+        (center = (0.0, 0.0, 0.0), Lx = 1.0, Ly = 1.0, Lz = 1.0),
+        (center = (1.0, 0.0, 0.0), Lx = 1.0, Ly = 1.0, Lz = 1.0),
+    ]
+    epses = [2.0, 4.0]
+    eps_out = 1.0
+    interface = BI.multi_dielectric_box3d(4, 0.3, boxes, epses, eps_out)
+
+    # Point source outside both boxes
+    ps = BI.PointSource((3.0, 0.0, 0.0), 1.0)
+    eps_src = eps_out
+
+    # Build LHS and RHS
+    lhs = BI.Lhs_dielectric_box3d(interface)
+    rhs = BI.Rhs_dielectric_box3d(interface, ps, eps_src)
+
+    @test size(lhs, 1) == BI.num_points(interface)
+    @test size(lhs, 2) == BI.num_points(interface)
+    @test length(rhs) == BI.num_points(interface)
+
+    # Solve
+    sigma = lhs \ rhs
+    @test length(sigma) == BI.num_points(interface)
+    @test all(isfinite.(sigma))
+end
