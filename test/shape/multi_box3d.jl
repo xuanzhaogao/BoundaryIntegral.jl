@@ -163,9 +163,10 @@ end
     remaining_half = BI._subtract_rects_from_face_3d(face_a, face_b, face_c, face_d, face_n, shared_half)
     total_area_remaining = sum(norm(r[2] .- r[1]) * norm(r[1] .- r[4]) for r in remaining_half)
     @test total_area_remaining ≈ 0.5
-    # The remaining piece should have edge_ab=false (interior cut at z=0), others on boundary
+    # The remaining piece: edge_ab at z=0 is on a shared region boundary → physical
+    # edge_cd at z=0.5 is on the original face boundary → physical
     _, _, _, _, ie_half, ic_half = remaining_half[1]
-    @test ie_half[1] == false  # ab edge: at z=0, not on original face boundary
+    @test ie_half[1] == true   # ab edge: at z=0, on shared region boundary
     @test ie_half[3] == true   # cd edge: at z=0.5, on original face boundary
 
     # Center hole: 1x1 shared in center of 2x2 face (on the x=1 plane)
@@ -180,13 +181,13 @@ end
     total_area_center = sum(norm(r[2] .- r[1]) * norm(r[1] .- r[4]) for r in remaining_center)
     @test total_area_center ≈ 3.0  # 4 - 1
 
-    # Interior sub-rectangles (not touching any face boundary) should have all edges false
-    n_all_interior = count(r -> !any(r[5]) && !any(r[6]), remaining_center)
-    # The 4 corner pieces should have 2 edges each, the 4 side pieces should have 1 edge each
-    n_corner_pieces = count(r -> count(r[5]) == 2, remaining_center)
-    n_side_pieces = count(r -> count(r[5]) == 1, remaining_center)
-    @test n_corner_pieces == 4
-    @test n_side_pieces == 4
+    # All edges are physical: they lie on either the face boundary or the shared region boundary
+    # Corner pieces (4): all 4 edges are physical (2 face boundary + 2 shared boundary)
+    # Side pieces (4): all 4 edges are physical (1 face boundary + 2 shared boundary + 1 shared boundary)
+    for r in remaining_center
+        @test all(r[5])  # all edges physical
+        @test all(r[6])  # all corners physical
+    end
 end
 
 @testset "multi_dielectric_box3d" begin

@@ -232,6 +232,36 @@ function _subtract_rects_from_face_3d(
         return false
     end
 
+    # Collect shared region boundary coordinates for edge classification
+    shared_u_bounds = T[]
+    shared_v_bounds = T[]
+    for rect in shared
+        rect_u_min = minimum(p[ax1] for p in rect)
+        rect_u_max = maximum(p[ax1] for p in rect)
+        rect_v_min = minimum(p[ax2] for p in rect)
+        rect_v_max = maximum(p[ax2] for p in rect)
+        push!(shared_u_bounds, rect_u_min, rect_u_max)
+        push!(shared_v_bounds, rect_v_min, rect_v_max)
+    end
+
+    # Check if a coordinate lies on the face boundary or a shared region boundary
+    function is_physical_u(u::T)
+        abs(u - face_u_min) < tol && return true
+        abs(u - face_u_max) < tol && return true
+        for su in shared_u_bounds
+            abs(u - su) < tol && return true
+        end
+        return false
+    end
+    function is_physical_v(v::T)
+        abs(v - face_v_min) < tol && return true
+        abs(v - face_v_max) < tol && return true
+        for sv in shared_v_bounds
+            abs(v - sv) < tol && return true
+        end
+        return false
+    end
+
     remaining = Tuple{NTuple{3,T}, NTuple{3,T}, NTuple{3,T}, NTuple{3,T}, NTuple{4,Bool}, NTuple{4,Bool}}[]
 
     for i in 1:(length(u_coords) - 1)
@@ -247,21 +277,21 @@ function _subtract_rects_from_face_3d(
             v_mid = (v_lo + v_hi) / 2
 
             if !is_shared(u_mid, v_mid)
-                # Build corners: a=(u_lo,v_lo), b=(u_hi,v_lo), c=(u_hi,v_hi), d=(u_lo,v_hi)
                 ra = make_point_3d(u_lo, v_lo)
                 rb = make_point_3d(u_hi, v_lo)
                 rc = make_point_3d(u_hi, v_hi)
                 rd = make_point_3d(u_lo, v_hi)
 
-                # An edge is a physical boundary only if it lies on the original face boundary.
-                # Edge ab: v = v_lo, physical if v_lo ≈ face_v_min
-                # Edge bc: u = u_hi, physical if u_hi ≈ face_u_max
-                # Edge cd: v = v_hi, physical if v_hi ≈ face_v_max
-                # Edge da: u = u_lo, physical if u_lo ≈ face_u_min
-                edge_ab = abs(v_lo - face_v_min) < tol
-                edge_bc = abs(u_hi - face_u_max) < tol
-                edge_cd = abs(v_hi - face_v_max) < tol
-                edge_da = abs(u_lo - face_u_min) < tol
+                # An edge is physical if it lies on the original face boundary
+                # OR on a shared region boundary (where another box's edge meets this face).
+                # Edge ab: v = v_lo
+                # Edge bc: u = u_hi
+                # Edge cd: v = v_hi
+                # Edge da: u = u_lo
+                edge_ab = is_physical_v(v_lo)
+                edge_bc = is_physical_u(u_hi)
+                edge_cd = is_physical_v(v_hi)
+                edge_da = is_physical_u(u_lo)
 
                 # A corner is physical only if both adjacent edges are physical.
                 corner_a = edge_da && edge_ab
