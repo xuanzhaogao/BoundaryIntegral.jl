@@ -140,3 +140,29 @@ end
     shared_far = BI._detect_shared_faces_3d(boxes_far)
     @test length(shared_far) == 0
 end
+
+@testset "_subtract_rects_from_face_3d" begin
+    # Face on x=0.5 plane, 1x1 face from y=-0.5..0.5, z=-0.5..0.5
+    face_a = (0.5, -0.5, -0.5)
+    face_b = (0.5,  0.5, -0.5)
+    face_c = (0.5,  0.5,  0.5)
+    face_d = (0.5, -0.5,  0.5)
+    face_n = (1.0, 0.0, 0.0)
+
+    # No shared regions: should return the whole face
+    remaining = BI._subtract_rects_from_face_3d(face_a, face_b, face_c, face_d, face_n, NTuple{4, NTuple{3, Float64}}[])
+    @test length(remaining) == 1
+    total_area = sum(norm(r[2] .- r[1]) * norm(r[1] .- r[4]) for r in remaining)
+    @test total_area ≈ 1.0
+
+    # Full face shared: should return empty
+    shared_full = [(face_a, face_b, face_c, face_d)]
+    remaining_full = BI._subtract_rects_from_face_3d(face_a, face_b, face_c, face_d, face_n, shared_full)
+    @test isempty(remaining_full)
+
+    # Half face shared: bottom half z=-0.5..0.0
+    shared_half = [((0.5, -0.5, -0.5), (0.5, 0.5, -0.5), (0.5, 0.5, 0.0), (0.5, -0.5, 0.0))]
+    remaining_half = BI._subtract_rects_from_face_3d(face_a, face_b, face_c, face_d, face_n, shared_half)
+    total_area_remaining = sum(norm(r[2] .- r[1]) * norm(r[1] .- r[4]) for r in remaining_half)
+    @test total_area_remaining ≈ 0.5
+end

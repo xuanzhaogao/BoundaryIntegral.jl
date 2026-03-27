@@ -421,6 +421,103 @@ function _detect_shared_faces_3d(boxes::Vector{<:NamedTuple})
     return shared
 end
 
+# Subtract a set of axis-aligned rectangles from an axis-aligned face in 3D.
+# All rectangles must lie on the same plane as the face.
+# Returns a vector of (a, b, c, d) remaining rectangular regions with normal = face normal.
+function _subtract_rects_from_face_3d(
+    a::NTuple{3, T}, b::NTuple{3, T}, c::NTuple{3, T}, d::NTuple{3, T}, normal::NTuple{3, T},
+    shared::Vector{<:NTuple{4, NTuple{3, T}}};
+    tol::T = T(1e-10)
+) where T
+    if isempty(shared)
+        return [(a, b, c, d)]
+    end
+
+    abs_n = (abs(normal[1]), abs(normal[2]), abs(normal[3]))
+    if abs_n[1] > 0.5
+        ax1, ax2 = 2, 3
+    elseif abs_n[2] > 0.5
+        ax1, ax2 = 1, 3
+    else
+        ax1, ax2 = 1, 2
+    end
+    normal_ax = findfirst(x -> x > 0.5, abs_n)
+    plane_coord = a[normal_ax]
+
+    # Face bounding box in 2D
+    corners_face = (a, b, c, d)
+    face_u_min = minimum(p[ax1] for p in corners_face)
+    face_u_max = maximum(p[ax1] for p in corners_face)
+    face_v_min = minimum(p[ax2] for p in corners_face)
+    face_v_max = maximum(p[ax2] for p in corners_face)
+
+    # Collect all u and v coordinates from face and shared regions
+    u_coords = T[face_u_min, face_u_max]
+    v_coords = T[face_v_min, face_v_max]
+    for rect in shared
+        for corner in rect
+            push!(u_coords, corner[ax1])
+            push!(v_coords, corner[ax2])
+        end
+    end
+    sort!(unique!(u_coords))
+    sort!(unique!(v_coords))
+
+    # Filter to within face bounds
+    filter!(u -> face_u_min - tol <= u <= face_u_max + tol, u_coords)
+    filter!(v -> face_v_min - tol <= v <= face_v_max + tol, v_coords)
+
+    function make_point_3d(u::T, v::T)
+        p = zeros(T, 3)
+        p[ax1] = u
+        p[ax2] = v
+        p[normal_ax] = plane_coord
+        return NTuple{3, T}(Tuple(p))
+    end
+
+    # Check if a 2D cell center is inside any shared rectangle
+    function is_shared(u_mid::T, v_mid::T)
+        for rect in shared
+            rect_u_min = minimum(p[ax1] for p in rect)
+            rect_u_max = maximum(p[ax1] for p in rect)
+            rect_v_min = minimum(p[ax2] for p in rect)
+            rect_v_max = maximum(p[ax2] for p in rect)
+            if rect_u_min - tol <= u_mid <= rect_u_max + tol &&
+               rect_v_min - tol <= v_mid <= rect_v_max + tol
+                return true
+            end
+        end
+        return false
+    end
+
+    remaining = NTuple{4, NTuple{3, T}}[]
+
+    for i in 1:(length(u_coords) - 1)
+        for j in 1:(length(v_coords) - 1)
+            u_lo, u_hi = u_coords[i], u_coords[i + 1]
+            v_lo, v_hi = v_coords[j], v_coords[j + 1]
+
+            if u_hi - u_lo < tol || v_hi - v_lo < tol
+                continue
+            end
+
+            u_mid = (u_lo + u_hi) / 2
+            v_mid = (v_lo + v_hi) / 2
+
+            if !is_shared(u_mid, v_mid)
+                # Build corners with same winding as original face
+                ra = make_point_3d(u_lo, v_lo)
+                rb = make_point_3d(u_hi, v_lo)
+                rc = make_point_3d(u_hi, v_hi)
+                rd = make_point_3d(u_lo, v_hi)
+                push!(remaining, (ra, rb, rc, rd))
+            end
+        end
+    end
+
+    return remaining
+end
+
 function _box3d_rhs_adaptive_initial_panels(Lx::T, Ly::T, Lz::T, alpha::T) where T
     vertices, faces, normals = _box3d_geometry(Lx, Ly, Lz)
 
