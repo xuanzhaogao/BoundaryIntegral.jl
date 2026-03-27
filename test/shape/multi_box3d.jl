@@ -166,3 +166,79 @@ end
     total_area_remaining = sum(norm(r[2] .- r[1]) * norm(r[1] .- r[4]) for r in remaining_half)
     @test total_area_remaining ≈ 0.5
 end
+
+@testset "multi_dielectric_box3d" begin
+    @testset "single box equivalence" begin
+        Lx, Ly, Lz = 1.0, 1.0, 1.0
+        n_quad = 4
+        l_ec = 0.3
+        eps_in = 2.0
+        eps_out = 1.0
+
+        single = BI.single_dielectric_box3d(Lx, Ly, Lz, n_quad, l_ec, eps_in, eps_out, Float64)
+
+        boxes = [(center = (0.0, 0.0, 0.0), Lx = Lx, Ly = Ly, Lz = Lz)]
+        epses = [eps_in]
+        multi = BI.multi_dielectric_box3d(n_quad, l_ec, boxes, epses, eps_out)
+
+        @test length(multi.panels) == length(single.panels)
+        @test BI.num_points(multi) == BI.num_points(single)
+        @test all(multi.eps_in .== eps_in)
+        @test all(multi.eps_out .== eps_out)
+    end
+
+    @testset "two touching boxes" begin
+        boxes = [
+            (center = (0.0, 0.0, 0.0), Lx = 1.0, Ly = 1.0, Lz = 1.0),
+            (center = (1.0, 0.0, 0.0), Lx = 1.0, Ly = 1.0, Lz = 1.0),
+        ]
+        epses = [2.0, 4.0]
+        eps_out = 1.0
+        interface = BI.multi_dielectric_box3d(4, 0.3, boxes, epses, eps_out)
+
+        @test length(interface.panels) > 0
+        @test BI.num_points(interface) > 0
+
+        # Check that eps values are correct
+        unique_eps_pairs = Set{Tuple{Float64, Float64}}()
+        for i in 1:length(interface.panels)
+            push!(unique_eps_pairs, (interface.eps_in[i], interface.eps_out[i]))
+        end
+        # Should have: (2.0, 1.0) for box1-vacuum, (4.0, 1.0) for box2-vacuum,
+        # and (4.0, 2.0) for the shared face (normal from box2 to box1)
+        @test (2.0, 1.0) in unique_eps_pairs  # box1 external
+        @test (4.0, 1.0) in unique_eps_pairs  # box2 external
+        @test (4.0, 2.0) in unique_eps_pairs  # shared face
+
+        # Total surface area check:
+        # Two unit cubes touching: total exposed area = 2*6 - 2*1 = 10 external + 1 shared = 11 face-areas
+        total_weight = sum(BI.all_weights(interface))
+        @test total_weight ≈ 11.0 atol = 0.01
+    end
+
+    @testset "three boxes L-shape" begin
+        boxes = [
+            (center = (0.0, 0.0, 0.0), Lx = 1.0, Ly = 1.0, Lz = 1.0),
+            (center = (1.0, 0.0, 0.0), Lx = 1.0, Ly = 1.0, Lz = 1.0),
+            (center = (0.0, 1.0, 0.0), Lx = 1.0, Ly = 1.0, Lz = 1.0),
+        ]
+        epses = [2.0, 3.0, 4.0]
+        interface = BI.multi_dielectric_box3d(4, 0.3, boxes, epses)
+
+        @test length(interface.panels) > 0
+
+        # 3 cubes, 2 shared faces, total weight = 3*6 - 2*2 + 2 = 16
+        # Actually: 3 cubes have 18 face-areas total. 2 shared faces remove 2 external face-areas
+        # and add 2 shared face-areas (which are the same area).
+        # Total area integrated = 18 - 2*2 + 2 = 16... let me recalculate:
+        # Each shared face replaces 2 external faces (one from each box) with 1 shared face.
+        # So total face-areas = 18 - 2 = 16 (each shared face removes 1 net face since
+        # 2 external become 1 shared). Wait:
+        # - 3 boxes * 6 faces = 18 face-units
+        # - 2 shared faces: each shared face means 2 external faces are replaced by 1 shared face
+        # But the shared face is still a face with panels, so total face count = 18 - 2 = 16
+        # Total area = 16 * 1.0 = 16.0
+        total_weight = sum(BI.all_weights(interface))
+        @test total_weight ≈ 16.0 atol = 0.01
+    end
+end

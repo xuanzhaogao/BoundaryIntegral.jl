@@ -518,6 +518,82 @@ function _subtract_rects_from_face_3d(
     return remaining
 end
 
+function multi_dielectric_box3d(
+    n_quad::Int, l_ec::T,
+    boxes::Vector{<:NamedTuple},
+    epses::Vector{T},
+    eps_out::T = one(T);
+    alpha::T = T(sqrt(T(2)))
+) where T
+    @assert length(boxes) == length(epses) "Number of boxes must match number of permittivities"
+    @assert length(boxes) >= 1 "At least one box is required"
+
+    ns, ws = gausslegendre(n_quad)
+    ns = T.(ns)
+    ws = T.(ws)
+
+    n_boxes = length(boxes)
+
+    # Step 1: Detect all shared faces
+    shared_faces = _detect_shared_faces_3d(boxes)
+
+    # Step 2: For each box, generate faces, subtract shared regions, build panels
+    panels_vec = Vector{FlatPanel{T, 3}}()
+    eps_in_vec = Vector{T}()
+    eps_out_vec = Vector{T}()
+
+    for box_id in 1:n_boxes
+        box = boxes[box_id]
+        faces = _box3d_faces_at_center(box.center, box.Lx, box.Ly, box.Lz)
+
+        for (fa, fb, fc, fd, fn) in faces
+            # Find shared regions that overlap with this face
+            face_shared = NTuple{4, NTuple{3, T}}[]
+            for (region, id_lo, id_hi, normal) in shared_faces
+                if box_id == id_lo || box_id == id_hi
+                    # Check if this shared region lies on this face
+                    has_ov, ov_region = _rect_overlap_3d(
+                        fa, fb, fc, fd, fn,
+                        region[1], region[2], region[3], region[4], (-fn[1], -fn[2], -fn[3]),
+                    )
+                    if has_ov
+                        push!(face_shared, ov_region)
+                    end
+                end
+            end
+
+            # Get remaining external regions
+            remaining = _subtract_rects_from_face_3d(fa, fb, fc, fd, fn, face_shared)
+
+            # Build panels for remaining external regions
+            for (ra, rb, rc, rd) in remaining
+                is_edge = (true, true, true, true)
+                is_corner = (true, true, true, true)
+                new_panels = rect_panel3d_adaptive_panels(ra, rb, rc, rd, ns, ws, fn, is_edge, is_corner, alpha, l_ec)
+                append!(panels_vec, new_panels)
+                append!(eps_in_vec, fill(epses[box_id], length(new_panels)))
+                append!(eps_out_vec, fill(eps_out, length(new_panels)))
+            end
+        end
+    end
+
+    # Step 3: Build panels for shared faces
+    for (region, id_lo, id_hi, normal) in shared_faces
+        a, b, c, d = region
+        is_edge = (true, true, true, true)
+        is_corner = (true, true, true, true)
+        new_panels = rect_panel3d_adaptive_panels(a, b, c, d, ns, ws, normal, is_edge, is_corner, alpha, l_ec)
+        append!(panels_vec, new_panels)
+        # Convention (matching 2D): normal points from id_hi → id_lo
+        # eps_in = medium the normal comes FROM = epses[id_hi]
+        # eps_out = medium the normal points TO = epses[id_lo]
+        append!(eps_in_vec, fill(epses[id_hi], length(new_panels)))
+        append!(eps_out_vec, fill(epses[id_lo], length(new_panels)))
+    end
+
+    return DielectricInterface(panels_vec, eps_in_vec, eps_out_vec)
+end
+
 function _box3d_rhs_adaptive_initial_panels(Lx::T, Ly::T, Lz::T, alpha::T) where T
     vertices, faces, normals = _box3d_geometry(Lx, Ly, Lz)
 
