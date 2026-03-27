@@ -369,19 +369,20 @@ function _rect_overlap_3d(
     e_ad = (d1[ax1] - a1[ax1], d1[ax2] - a1[ax2])
 
     # Determine corner ordering based on face1's winding
-    u_start = (e_ab[1] >= 0) ? lo_u : hi_u
-    u_end = (e_ab[1] >= 0) ? hi_u : lo_u
-    v_start = (e_ad[2] >= 0) ? lo_v : hi_v
-    v_end = (e_ad[2] >= 0) ? hi_v : lo_v
-
-    # But actually for axis-aligned rects, let's just pick a consistent winding
-    # matching the face1 winding direction
     if abs(e_ab[1]) > tol  # a->b is along ax1
+        u_start = (e_ab[1] >= 0) ? lo_u : hi_u
+        u_end   = (e_ab[1] >= 0) ? hi_u : lo_u
+        v_start = (e_ad[2] >= 0) ? lo_v : hi_v
+        v_end   = (e_ad[2] >= 0) ? hi_v : lo_v
         oa = make_point(u_start, v_start)
         ob = make_point(u_end, v_start)
         oc = make_point(u_end, v_end)
         od = make_point(u_start, v_end)
     else  # a->b is along ax2
+        u_start = (e_ad[1] >= 0) ? lo_u : hi_u
+        u_end   = (e_ad[1] >= 0) ? hi_u : lo_u
+        v_start = (e_ab[2] >= 0) ? lo_v : hi_v
+        v_end   = (e_ab[2] >= 0) ? hi_v : lo_v
         oa = make_point(u_start, v_start)
         ob = make_point(u_start, v_end)
         oc = make_point(u_end, v_end)

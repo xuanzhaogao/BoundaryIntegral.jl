@@ -81,11 +81,7 @@ end
     )
     @test !has_overlap2
 
-    # Partial overlap: box1 unit cube at origin, box2 unit cube at (0, 0.5, 0)
-    # They share part of the y=+0.5 face of box1 and y=-0.5 face of box2 is at y=0.0
-    # Actually box2's y=-0.5 face is at y=0.5-0.5=0.0, box1's y=+0.5 face is at y=0.5
-    # These are NOT co-planar, so no overlap. Let me fix:
-    # box1 at origin, box2 at (0, 1.0, 0) - they touch at y=0.5
+    # Full overlap on y=0.5 plane: box1 at origin, box2 at (0,1,0), both unit cubes
     face_b1_yp_a = (0.5, 0.5, -0.5)  # box1 y=+0.5 face  (but this face has normal (0,1,0))
     face_b1_yp_b = (-0.5, 0.5, -0.5)
     face_b1_yp_c = (-0.5, 0.5, 0.5)
