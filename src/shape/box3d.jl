@@ -1,4 +1,4 @@
-# temporary panal for 3d rectangle surface panel generation
+# internal panel type for 3d rectangle surface panel generation
 struct TempPanel3D{T}
     a::NTuple{3, T}
     b::NTuple{3, T}

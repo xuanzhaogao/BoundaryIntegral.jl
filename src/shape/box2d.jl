@@ -1,4 +1,4 @@
-# temporary panel for 2d straight line panel generation
+# internal panel type for 2d straight line panel generation
 struct TempPanel2D{T}
     a::NTuple{2, T}
     b::NTuple{2, T}

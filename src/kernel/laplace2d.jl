@@ -163,39 +163,3 @@ function laplace2d_pottrg_fmm2d(interface::DielectricInterface{P, Float64}, targ
     f = charges -> _laplace2d_pottrg_fmm2d(charges, sources, weights, targets, thresh)
     return LinearMap{Float64}(f, size(targets, 2), n_points)
 end
-
-# I am not sure why we need to evaluate this
-# function _laplace2d_gradtrg_fmm2d(charges::AbstractVector{Float64}, sources::Matrix{Float64}, targets::Matrix{Float64}, weights::Vector{Float64}, norms::Matrix{Float64}, thresh::Float64)
-#     n = length(charges)
-#     m = size(targets, 2)
-#     @assert size(sources) == (2, n)
-#     @assert size(targets) == (2, m)
-#     @assert size(weights) == (n,)
-#     @assert size(norms) == (2, n)
-
-#     dipvecs = zeros(Float64, 2, n)
-#     for i in 1:n
-#         dipvecs[1, i] = norms[1, i] * (charges[i] * weights[i])
-#         dipvecs[2, i] = norms[2, i] * (charges[i] * weights[i])
-#     end
-
-#     vals = rfmm2d(eps = thresh, sources = sources, dipvecs = dipvecs, targets = targets, pgt = 1)
-#     return - vals.pottarg ./ 2π
-# end
-
-# function laplace2d_gradtrg_fmm2d(interface::DielectricInterface{P, Float64}, targets::Matrix{Float64}, thresh::Float64) where {P <: AbstractPanel}
-#     n_points = num_points(interface)
-#     sources = zeros(Float64, 2, n_points)
-#     weights = zeros(Float64, n_points)
-#     norms = zeros(Float64, 2, n_points)
-#     for (i, point) in enumerate(eachpoint(interface))
-#         weights[i] = point.panel_point.weight
-#         sources[1, i] = point.panel_point.point[1]
-#         sources[2, i] = point.panel_point.point[2]
-#         norms[1, i] = point.panel_point.normal[1]
-#         norms[2, i] = point.panel_point.normal[2]
-#     end
-
-#     f = charges -> _laplace2d_gradtrg_fmm2d(charges, sources, targets, weights, norms, thresh)
-#     return LinearMap{Float64}(f, size(targets, 2), n_points)
-# end
