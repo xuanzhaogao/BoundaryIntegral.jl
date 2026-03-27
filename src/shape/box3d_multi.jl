@@ -163,14 +163,16 @@ end
 
 # Subtract a set of axis-aligned rectangles from an axis-aligned face in 3D.
 # All rectangles must lie on the same plane as the face.
-# Returns a vector of (a, b, c, d) remaining rectangular regions with normal = face normal.
+# Returns a vector of (a, b, c, d, is_edge, is_corner) where is_edge and is_corner
+# are NTuple{4, Bool} indicating which edges/corners lie on the original face boundary.
+# Edge order: (ab, bc, cd, da). Corner order: (a, b, c, d).
 function _subtract_rects_from_face_3d(
     a::NTuple{3, T}, b::NTuple{3, T}, c::NTuple{3, T}, d::NTuple{3, T}, normal::NTuple{3, T},
     shared::Vector{<:NTuple{4, NTuple{3, T}}};
     tol::T = T(1e-10)
 ) where T
     if isempty(shared)
-        return [(a, b, c, d)]
+        return [(a, b, c, d, (true, true, true, true), (true, true, true, true))]
     end
 
     abs_n = (abs(normal[1]), abs(normal[2]), abs(normal[3]))
@@ -230,7 +232,7 @@ function _subtract_rects_from_face_3d(
         return false
     end
 
-    remaining = NTuple{4, NTuple{3, T}}[]
+    remaining = Tuple{NTuple{3,T}, NTuple{3,T}, NTuple{3,T}, NTuple{3,T}, NTuple{4,Bool}, NTuple{4,Bool}}[]
 
     for i in 1:(length(u_coords) - 1)
         for j in 1:(length(v_coords) - 1)
@@ -245,12 +247,31 @@ function _subtract_rects_from_face_3d(
             v_mid = (v_lo + v_hi) / 2
 
             if !is_shared(u_mid, v_mid)
-                # Build corners with same winding as original face
+                # Build corners: a=(u_lo,v_lo), b=(u_hi,v_lo), c=(u_hi,v_hi), d=(u_lo,v_hi)
                 ra = make_point_3d(u_lo, v_lo)
                 rb = make_point_3d(u_hi, v_lo)
                 rc = make_point_3d(u_hi, v_hi)
                 rd = make_point_3d(u_lo, v_hi)
-                push!(remaining, (ra, rb, rc, rd))
+
+                # An edge is a physical boundary only if it lies on the original face boundary.
+                # Edge ab: v = v_lo, physical if v_lo ≈ face_v_min
+                # Edge bc: u = u_hi, physical if u_hi ≈ face_u_max
+                # Edge cd: v = v_hi, physical if v_hi ≈ face_v_max
+                # Edge da: u = u_lo, physical if u_lo ≈ face_u_min
+                edge_ab = abs(v_lo - face_v_min) < tol
+                edge_bc = abs(u_hi - face_u_max) < tol
+                edge_cd = abs(v_hi - face_v_max) < tol
+                edge_da = abs(u_lo - face_u_min) < tol
+
+                # A corner is physical only if both adjacent edges are physical.
+                corner_a = edge_da && edge_ab
+                corner_b = edge_ab && edge_bc
+                corner_c = edge_bc && edge_cd
+                corner_d = edge_cd && edge_da
+
+                push!(remaining, (ra, rb, rc, rd,
+                    (edge_ab, edge_bc, edge_cd, edge_da),
+                    (corner_a, corner_b, corner_c, corner_d)))
             end
         end
     end
@@ -259,7 +280,7 @@ function _subtract_rects_from_face_3d(
 end
 
 # Compute all face regions for a multi-box system.
-# Returns a vector of (a, b, c, d, normal, eps_in, eps_out) for each face region
+# Returns a vector of (a, b, c, d, normal, eps_in, eps_out, is_edge, is_corner) for each face region
 # (both external and shared).
 function _multi_box3d_face_regions(
     boxes::Vector{<:NamedTuple},
@@ -269,7 +290,7 @@ function _multi_box3d_face_regions(
     shared_faces = _detect_shared_faces_3d(boxes)
     n_boxes = length(boxes)
 
-    regions = Tuple{NTuple{3,T}, NTuple{3,T}, NTuple{3,T}, NTuple{3,T}, NTuple{3,T}, T, T}[]
+    regions = Tuple{NTuple{3,T}, NTuple{3,T}, NTuple{3,T}, NTuple{3,T}, NTuple{3,T}, T, T, NTuple{4,Bool}, NTuple{4,Bool}}[]
 
     for box_id in 1:n_boxes
         box = boxes[box_id]
@@ -290,15 +311,17 @@ function _multi_box3d_face_regions(
             end
 
             remaining = _subtract_rects_from_face_3d(fa, fb, fc, fd, fn, face_shared)
-            for (ra, rb, rc, rd) in remaining
-                push!(regions, (ra, rb, rc, rd, fn, epses[box_id], eps_out))
+            for (ra, rb, rc, rd, ie, ic) in remaining
+                push!(regions, (ra, rb, rc, rd, fn, epses[box_id], eps_out, ie, ic))
             end
         end
     end
 
+    # Shared faces: all edges are physical boundaries (interface between two media)
     for (region, id_lo, id_hi, normal) in shared_faces
         a, b, c, d = region
-        push!(regions, (a, b, c, d, normal, epses[id_hi], epses[id_lo]))
+        push!(regions, (a, b, c, d, normal, epses[id_hi], epses[id_lo],
+            (true, true, true, true), (true, true, true, true)))
     end
 
     return regions
@@ -324,11 +347,8 @@ function multi_dielectric_box3d(
     eps_in_vec = Vector{T}()
     eps_out_vec = Vector{T}()
 
-    is_edge = (true, true, true, true)
-    is_corner = (true, true, true, true)
-
-    for (ra, rb, rc, rd, fn, ei, eo) in regions
-        new_panels = rect_panel3d_adaptive_panels(ra, rb, rc, rd, ns, ws, fn, is_edge, is_corner, alpha, l_ec)
+    for (ra, rb, rc, rd, fn, ei, eo, ie, ic) in regions
+        new_panels = rect_panel3d_adaptive_panels(ra, rb, rc, rd, ns, ws, fn, ie, ic, alpha, l_ec)
         append!(panels_vec, new_panels)
         append!(eps_in_vec, fill(ei, length(new_panels)))
         append!(eps_out_vec, fill(eo, length(new_panels)))
@@ -356,12 +376,9 @@ function multi_dielectric_box3d_rhs_adaptive(
     eps_in_vec = Vector{T}()
     eps_out_vec = Vector{T}()
 
-    is_edge = (true, true, true, true)
-    is_corner = (true, true, true, true)
-
-    for (ra, rb, rc, rd, fn, ei, eo) in regions
+    for (ra, rb, rc, rd, fn, ei, eo, ie, ic) in regions
         new_panels = rect_panel3d_rhs_adaptive_panels(
-            ra, rb, rc, rd, n_quad, rhs, fn, is_edge, is_corner, alpha, l_ec, rhs_atol, max_depth;
+            ra, rb, rc, rd, n_quad, rhs, fn, ie, ic, alpha, l_ec, rhs_atol, max_depth;
         )
         append!(panels_vec, new_panels)
         append!(eps_in_vec, fill(ei, length(new_panels)))
@@ -410,14 +427,11 @@ function multi_dielectric_box3d_rhs_adaptive(
     eps_in_vec = Vector{T}()
     eps_out_vec = Vector{T}()
 
-    is_edge = (true, true, true, true)
-    is_corner = (true, true, true, true)
-
     resolved_tkm_kmax = isnothing(tkm_kmax) ? _estimate_tkm3dc_kmax(vs) : tkm_kmax
 
-    for (ra, rb, rc, rd, fn, ei, eo) in regions
+    for (ra, rb, rc, rd, fn, ei, eo, ie, ic) in regions
         new_panels = rect_panel3d_rhs_adaptive_panels(
-            ra, rb, rc, rd, n_quad, vs, eps_src, fn, is_edge, is_corner, alpha, l_ec, rhs_atol, max_depth, resolved_tkm_kmax;
+            ra, rb, rc, rd, n_quad, vs, eps_src, fn, ie, ic, alpha, l_ec, rhs_atol, max_depth, resolved_tkm_kmax;
         )
         append!(panels_vec, new_panels)
         append!(eps_in_vec, fill(ei, length(new_panels)))

@@ -145,11 +145,13 @@ end
     face_d = (0.5, -0.5,  0.5)
     face_n = (1.0, 0.0, 0.0)
 
-    # No shared regions: should return the whole face
+    # No shared regions: should return the whole face with all edges/corners true
     remaining = BI._subtract_rects_from_face_3d(face_a, face_b, face_c, face_d, face_n, NTuple{4, NTuple{3, Float64}}[])
     @test length(remaining) == 1
-    total_area = sum(norm(r[2] .- r[1]) * norm(r[1] .- r[4]) for r in remaining)
-    @test total_area ≈ 1.0
+    ra, rb, rc, rd, ie, ic = remaining[1]
+    @test norm(rb .- ra) * norm(ra .- rd) ≈ 1.0
+    @test ie == (true, true, true, true)
+    @test ic == (true, true, true, true)
 
     # Full face shared: should return empty
     shared_full = [(face_a, face_b, face_c, face_d)]
@@ -161,6 +163,30 @@ end
     remaining_half = BI._subtract_rects_from_face_3d(face_a, face_b, face_c, face_d, face_n, shared_half)
     total_area_remaining = sum(norm(r[2] .- r[1]) * norm(r[1] .- r[4]) for r in remaining_half)
     @test total_area_remaining ≈ 0.5
+    # The remaining piece should have edge_ab=false (interior cut at z=0), others on boundary
+    _, _, _, _, ie_half, ic_half = remaining_half[1]
+    @test ie_half[1] == false  # ab edge: at z=0, not on original face boundary
+    @test ie_half[3] == true   # cd edge: at z=0.5, on original face boundary
+
+    # Center hole: 1x1 shared in center of 2x2 face (on the x=1 plane)
+    face2_a = (1.0, -1.0, -1.0)
+    face2_b = (1.0,  1.0, -1.0)
+    face2_c = (1.0,  1.0,  1.0)
+    face2_d = (1.0, -1.0,  1.0)
+    face2_n = (1.0, 0.0, 0.0)
+    shared_center = [((1.0, -0.5, -0.5), (1.0, 0.5, -0.5), (1.0, 0.5, 0.5), (1.0, -0.5, 0.5))]
+    remaining_center = BI._subtract_rects_from_face_3d(face2_a, face2_b, face2_c, face2_d, face2_n, shared_center)
+    @test length(remaining_center) == 8
+    total_area_center = sum(norm(r[2] .- r[1]) * norm(r[1] .- r[4]) for r in remaining_center)
+    @test total_area_center ≈ 3.0  # 4 - 1
+
+    # Interior sub-rectangles (not touching any face boundary) should have all edges false
+    n_all_interior = count(r -> !any(r[5]) && !any(r[6]), remaining_center)
+    # The 4 corner pieces should have 2 edges each, the 4 side pieces should have 1 edge each
+    n_corner_pieces = count(r -> count(r[5]) == 2, remaining_center)
+    n_side_pieces = count(r -> count(r[5]) == 1, remaining_center)
+    @test n_corner_pieces == 4
+    @test n_side_pieces == 4
 end
 
 @testset "multi_dielectric_box3d" begin
