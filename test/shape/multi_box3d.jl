@@ -237,6 +237,34 @@ end
         total_weight = sum(BI.all_weights(interface))
         @test total_weight ≈ 16.0 atol = 0.01
     end
+
+    @testset "different-sized touching boxes" begin
+        boxes = [
+            (center = (0.0, 0.0, 0.0), Lx = 2.0, Ly = 2.0, Lz = 2.0),
+            (center = (1.5, 0.0, 0.0), Lx = 1.0, Ly = 1.0, Lz = 1.0),
+        ]
+        epses = [2.0, 4.0]
+        eps_out = 1.0
+        interface = BI.multi_dielectric_box3d(4, 0.3, boxes, epses, eps_out)
+
+        @test length(interface.panels) > 0
+
+        # Big box: 6 faces of 2x2=4, minus 1x1 shared = 23 external
+        # Small box: 6 faces of 1x1=1, minus 1x1 shared = 5 external
+        # Shared: 1x1 = 1
+        # Total = 23 + 5 + 1 = 29
+        total_weight = sum(BI.all_weights(interface))
+        @test total_weight ≈ 29.0 atol = 0.1
+
+        # Verify eps pairs
+        eps_pairs = Set{Tuple{Float64, Float64}}()
+        for i in 1:length(interface.panels)
+            push!(eps_pairs, (interface.eps_in[i], interface.eps_out[i]))
+        end
+        @test (2.0, 1.0) in eps_pairs
+        @test (4.0, 1.0) in eps_pairs
+        @test (4.0, 2.0) in eps_pairs
+    end
 end
 
 @testset "multi_dielectric_box3d solver integration" begin
