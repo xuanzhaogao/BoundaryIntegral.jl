@@ -265,3 +265,50 @@ end
     @test length(sigma) == BI.num_points(interface)
     @test all(isfinite.(sigma))
 end
+
+@testset "multi_dielectric_box3d_rhs_adaptive" begin
+    @testset "PointSource with different-sized boxes" begin
+        boxes = [
+            (center = (0.0, 0.0, 0.0), Lx = 2.0, Ly = 2.0, Lz = 2.0),
+            (center = (1.5, 0.0, 0.0), Lx = 1.0, Ly = 1.0, Lz = 1.0),
+        ]
+        epses = [2.0, 4.0]
+        eps_out = 1.0
+        ps = BI.PointSource((0.1, 0.1, 0.1), 1.0)
+        eps_src = epses[1]
+
+        interface = BI.multi_dielectric_box3d_rhs_adaptive(
+            4, 0.3, boxes, epses, ps, eps_src, 1e-4, eps_out;
+            max_depth = 4,
+        )
+
+        @test length(interface.panels) > 0
+        total_weight = sum(BI.all_weights(interface))
+        @test total_weight ≈ 29.0 atol = 0.1
+
+        lhs = BI.Lhs_dielectric_box3d(interface)
+        rhs = BI.Rhs_dielectric_box3d(interface, ps, eps_src)
+        sigma = lhs \ rhs
+        @test all(isfinite.(sigma))
+    end
+
+    @testset "rhs::Function overload" begin
+        boxes = [
+            (center = (0.0, 0.0, 0.0), Lx = 1.0, Ly = 1.0, Lz = 1.0),
+            (center = (1.0, 0.0, 0.0), Lx = 1.0, Ly = 1.0, Lz = 1.0),
+        ]
+        epses = [2.0, 4.0]
+        ps = BI.PointSource((0.1, 0.1, 0.1), 1.0)
+        eps_src = 2.0
+        rhs_func(p, n) = -ps.charge * BI.laplace3d_grad(ps.point, p, n) / eps_src
+
+        interface = BI.multi_dielectric_box3d_rhs_adaptive(
+            4, 0.3, boxes, epses, rhs_func, 1e-4;
+            max_depth = 4,
+        )
+
+        @test length(interface.panels) > 0
+        total_weight = sum(BI.all_weights(interface))
+        @test total_weight ≈ 11.0 atol = 0.1
+    end
+end

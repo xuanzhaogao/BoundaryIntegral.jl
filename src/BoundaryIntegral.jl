@@ -38,7 +38,7 @@ export laplace3d_pottrg_near
 # shapes
 export single_dielectric_box2d, multi_dielectric_box2d
 export single_dielectric_box3d, multi_dielectric_box3d
-export single_dielectric_box3d_rhs_adaptive
+export single_dielectric_box3d_rhs_adaptive, multi_dielectric_box3d_rhs_adaptive
 export single_dielectric_box3d_rhs_adaptive_varquad
 
 # solvers
