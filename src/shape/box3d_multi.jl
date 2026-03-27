@@ -232,77 +232,56 @@ function _subtract_rects_from_face_3d(
         return false
     end
 
-    # Collect shared region boundary coordinates for edge classification
-    shared_u_bounds = T[]
-    shared_v_bounds = T[]
-    for rect in shared
-        rect_u_min = minimum(p[ax1] for p in rect)
-        rect_u_max = maximum(p[ax1] for p in rect)
-        rect_v_min = minimum(p[ax2] for p in rect)
-        rect_v_max = maximum(p[ax2] for p in rect)
-        push!(shared_u_bounds, rect_u_min, rect_u_max)
-        push!(shared_v_bounds, rect_v_min, rect_v_max)
-    end
-
-    # Check if a coordinate lies on the face boundary or a shared region boundary
-    function is_physical_u(u::T)
-        abs(u - face_u_min) < tol && return true
-        abs(u - face_u_max) < tol && return true
-        for su in shared_u_bounds
-            abs(u - su) < tol && return true
+    # Build a grid status map: true = shared, false = remaining
+    nu = length(u_coords) - 1
+    nv = length(v_coords) - 1
+    cell_shared = Matrix{Bool}(undef, nu, nv)
+    for i in 1:nu
+        for j in 1:nv
+            u_lo, u_hi = u_coords[i], u_coords[i + 1]
+            v_lo, v_hi = v_coords[j], v_coords[j + 1]
+            if u_hi - u_lo < tol || v_hi - v_lo < tol
+                cell_shared[i, j] = true  # degenerate cell, treat as shared
+            else
+                cell_shared[i, j] = is_shared((u_lo + u_hi) / 2, (v_lo + v_hi) / 2)
+            end
         end
-        return false
-    end
-    function is_physical_v(v::T)
-        abs(v - face_v_min) < tol && return true
-        abs(v - face_v_max) < tol && return true
-        for sv in shared_v_bounds
-            abs(v - sv) < tol && return true
-        end
-        return false
     end
 
     remaining = Tuple{NTuple{3,T}, NTuple{3,T}, NTuple{3,T}, NTuple{3,T}, NTuple{4,Bool}, NTuple{4,Bool}}[]
 
-    for i in 1:(length(u_coords) - 1)
-        for j in 1:(length(v_coords) - 1)
-            u_lo, u_hi = u_coords[i], u_coords[i + 1]
-            v_lo, v_hi = v_coords[j], v_coords[j + 1]
-
-            if u_hi - u_lo < tol || v_hi - v_lo < tol
+    for i in 1:nu
+        for j in 1:nv
+            if cell_shared[i, j]
                 continue
             end
 
-            u_mid = (u_lo + u_hi) / 2
-            v_mid = (v_lo + v_hi) / 2
+            u_lo, u_hi = u_coords[i], u_coords[i + 1]
+            v_lo, v_hi = v_coords[j], v_coords[j + 1]
 
-            if !is_shared(u_mid, v_mid)
-                ra = make_point_3d(u_lo, v_lo)
-                rb = make_point_3d(u_hi, v_lo)
-                rc = make_point_3d(u_hi, v_hi)
-                rd = make_point_3d(u_lo, v_hi)
+            ra = make_point_3d(u_lo, v_lo)
+            rb = make_point_3d(u_hi, v_lo)
+            rc = make_point_3d(u_hi, v_hi)
+            rd = make_point_3d(u_lo, v_hi)
 
-                # An edge is physical if it lies on the original face boundary
-                # OR on a shared region boundary (where another box's edge meets this face).
-                # Edge ab: v = v_lo
-                # Edge bc: u = u_hi
-                # Edge cd: v = v_hi
-                # Edge da: u = u_lo
-                edge_ab = is_physical_v(v_lo)
-                edge_bc = is_physical_u(u_hi)
-                edge_cd = is_physical_v(v_hi)
-                edge_da = is_physical_u(u_lo)
+            # An edge is physical if the neighbor on the other side is either:
+            #   - out of bounds (face boundary), or
+            #   - a shared (removed) cell (interface with another box)
+            # An edge is NOT physical if the neighbor is another remaining cell
+            # (just an internal grid line on the same smooth surface).
+            edge_ab = (j == 1)  || cell_shared[i, j - 1]   # neighbor below
+            edge_bc = (i == nu) || cell_shared[i + 1, j]    # neighbor right
+            edge_cd = (j == nv) || cell_shared[i, j + 1]    # neighbor above
+            edge_da = (i == 1)  || cell_shared[i - 1, j]    # neighbor left
 
-                # A corner is physical only if both adjacent edges are physical.
-                corner_a = edge_da && edge_ab
-                corner_b = edge_ab && edge_bc
-                corner_c = edge_bc && edge_cd
-                corner_d = edge_cd && edge_da
+            corner_a = edge_da && edge_ab
+            corner_b = edge_ab && edge_bc
+            corner_c = edge_bc && edge_cd
+            corner_d = edge_cd && edge_da
 
-                push!(remaining, (ra, rb, rc, rd,
-                    (edge_ab, edge_bc, edge_cd, edge_da),
-                    (corner_a, corner_b, corner_c, corner_d)))
-            end
+            push!(remaining, (ra, rb, rc, rd,
+                (edge_ab, edge_bc, edge_cd, edge_da),
+                (corner_a, corner_b, corner_c, corner_d)))
         end
     end
 

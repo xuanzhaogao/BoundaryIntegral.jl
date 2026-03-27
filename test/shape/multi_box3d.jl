@@ -163,13 +163,18 @@ end
     remaining_half = BI._subtract_rects_from_face_3d(face_a, face_b, face_c, face_d, face_n, shared_half)
     total_area_remaining = sum(norm(r[2] .- r[1]) * norm(r[1] .- r[4]) for r in remaining_half)
     @test total_area_remaining ≈ 0.5
-    # The remaining piece: edge_ab at z=0 is on a shared region boundary → physical
-    # edge_cd at z=0.5 is on the original face boundary → physical
+    # The remaining piece: edge_ab at z=0 borders the shared region → physical
+    # edge_cd at z=0.5 is on the face boundary → physical
     _, _, _, _, ie_half, ic_half = remaining_half[1]
-    @test ie_half[1] == true   # ab edge: at z=0, on shared region boundary
-    @test ie_half[3] == true   # cd edge: at z=0.5, on original face boundary
+    @test ie_half[1] == true   # ab edge: neighbor is shared → physical
+    @test ie_half[3] == true   # cd edge: face boundary → physical
 
     # Center hole: 1x1 shared in center of 2x2 face (on the x=1 plane)
+    # Grid layout (R=remaining, S=shared):
+    #        z=-1    z=0    z=1
+    # y=-1  [ R1 ] [ R2 ] [ R3 ]
+    # y=0   [ R4 ] [  S ] [ R5 ]
+    # y=1   [ R6 ] [ R7 ] [ R8 ]
     face2_a = (1.0, -1.0, -1.0)
     face2_b = (1.0,  1.0, -1.0)
     face2_c = (1.0,  1.0,  1.0)
@@ -181,12 +186,13 @@ end
     total_area_center = sum(norm(r[2] .- r[1]) * norm(r[1] .- r[4]) for r in remaining_center)
     @test total_area_center ≈ 3.0  # 4 - 1
 
-    # All edges are physical: they lie on either the face boundary or the shared region boundary
-    # Corner pieces (4): all 4 edges are physical (2 face boundary + 2 shared boundary)
-    # Side pieces (4): all 4 edges are physical (1 face boundary + 2 shared boundary + 1 shared boundary)
+    # Edge is physical if neighbor is shared or out-of-bounds (face boundary).
+    # Edge is NOT physical if neighbor is another remaining cell on the same surface.
+    # All 8 cells have exactly 2 physical edges:
+    #   Corner cells (R1,R3,R6,R8): 2 face-boundary edges
+    #   Side cells (R2,R4,R5,R7): 1 face-boundary + 1 shared-neighbor edge
     for r in remaining_center
-        @test all(r[5])  # all edges physical
-        @test all(r[6])  # all corners physical
+        @test count(r[5]) == 2
     end
 end
 
