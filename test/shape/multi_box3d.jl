@@ -106,3 +106,37 @@ end
     oa3, ob3, oc3, od3 = region3
     @test norm(ob3 .- oa3) * norm(oa3 .- od3) ≈ 1.0
 end
+
+@testset "_detect_shared_faces_3d" begin
+    # Two unit cubes touching at x=0.5
+    boxes = [
+        (center = (0.0, 0.0, 0.0), Lx = 1.0, Ly = 1.0, Lz = 1.0),
+        (center = (1.0, 0.0, 0.0), Lx = 1.0, Ly = 1.0, Lz = 1.0),
+    ]
+    shared = BI._detect_shared_faces_3d(boxes)
+    @test length(shared) == 1  # one shared face
+
+    # Each entry is (region, id_lo, id_hi, normal_from_hi_to_lo)
+    region, id1, id2, normal = shared[1]
+    @test id1 < id2
+    a, b, c, d = region
+    area = norm(b .- a) * norm(a .- d)
+    @test area ≈ 1.0  # full 1x1 face
+
+    # Three boxes in a line
+    boxes3 = [
+        (center = (0.0, 0.0, 0.0), Lx = 1.0, Ly = 1.0, Lz = 1.0),
+        (center = (1.0, 0.0, 0.0), Lx = 1.0, Ly = 1.0, Lz = 1.0),
+        (center = (2.0, 0.0, 0.0), Lx = 1.0, Ly = 1.0, Lz = 1.0),
+    ]
+    shared3 = BI._detect_shared_faces_3d(boxes3)
+    @test length(shared3) == 2  # box1-box2, box2-box3
+
+    # Non-touching boxes
+    boxes_far = [
+        (center = (0.0, 0.0, 0.0), Lx = 1.0, Ly = 1.0, Lz = 1.0),
+        (center = (5.0, 0.0, 0.0), Lx = 1.0, Ly = 1.0, Lz = 1.0),
+    ]
+    shared_far = BI._detect_shared_faces_3d(boxes_far)
+    @test length(shared_far) == 0
+end

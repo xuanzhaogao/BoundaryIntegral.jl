@@ -391,6 +391,36 @@ function _rect_overlap_3d(
     return true, (oa, ob, oc, od)
 end
 
+# Detect all shared faces between pairs of axis-aligned boxes.
+# Returns a vector of (region, id_lo, id_hi, normal) where:
+#   region = (a, b, c, d) corners of the shared rectangle
+#   id_lo < id_hi are box indices
+#   normal points from box id_hi toward box id_lo
+function _detect_shared_faces_3d(boxes::Vector{<:NamedTuple})
+    T = typeof(boxes[1].Lx)
+    shared = Tuple{NTuple{4, NTuple{3, T}}, Int, Int, NTuple{3, T}}[]
+
+    n_boxes = length(boxes)
+    for i in 1:n_boxes
+        faces_i = _box3d_faces_at_center(boxes[i].center, boxes[i].Lx, boxes[i].Ly, boxes[i].Lz)
+        for j in (i + 1):n_boxes
+            faces_j = _box3d_faces_at_center(boxes[j].center, boxes[j].Lx, boxes[j].Ly, boxes[j].Lz)
+            for (a1, b1, c1, d1, n1) in faces_i
+                for (a2, b2, c2, d2, n2) in faces_j
+                    has_overlap, region = _rect_overlap_3d(a1, b1, c1, d1, n1, a2, b2, c2, d2, n2)
+                    if has_overlap
+                        # normal points from higher-id box (j) to lower-id box (i)
+                        # n1 is the outward normal of box i's face, which points toward box j.
+                        push!(shared, (region, i, j, (-n1[1], -n1[2], -n1[3])))
+                    end
+                end
+            end
+        end
+    end
+
+    return shared
+end
+
 function _box3d_rhs_adaptive_initial_panels(Lx::T, Ly::T, Lz::T, alpha::T) where T
     vertices, faces, normals = _box3d_geometry(Lx, Ly, Lz)
 
