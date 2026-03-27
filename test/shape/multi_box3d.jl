@@ -138,6 +138,15 @@ end
 end
 
 @testset "_subtract_rects_from_face_3d" begin
+    function find_region_by_center(regions, y, z; atol = 1e-12)
+        idx = findfirst(regions) do region
+            center = (region[1] .+ region[2] .+ region[3] .+ region[4]) ./ 4
+            isapprox(center[2], y; atol = atol) && isapprox(center[3], z; atol = atol)
+        end
+        idx === nothing && error("No region centered at (y, z) = ($y, $z)")
+        return regions[idx]
+    end
+
     # Face on x=0.5 plane, 1x1 face from y=-0.5..0.5, z=-0.5..0.5
     face_a = (0.5, -0.5, -0.5)
     face_b = (0.5,  0.5, -0.5)
@@ -194,6 +203,27 @@ end
     for r in remaining_center
         @test count(r[5]) == 2
     end
+
+    # The shared region's corner points are physical even when the shared cell only
+    # touches a remaining cell diagonally.
+    @test all(count(r[6]) == 4 for r in remaining_center)
+
+    # Two edge-attached shared regions create an untouched interior grid point at
+    # (y, z) = (1, 1); it should remain smooth while shared-adjacent corners stay physical.
+    face3_a = (1.0, -2.0, -2.0)
+    face3_b = (1.0,  2.0, -2.0)
+    face3_c = (1.0,  2.0,  2.0)
+    face3_d = (1.0, -2.0,  2.0)
+    face3_n = (1.0, 0.0, 0.0)
+    shared_edge_l = [
+        ((1.0, -2.0, -1.0), (1.0, -1.0, -1.0), (1.0, -1.0, 1.0), (1.0, -2.0, 1.0)),
+        ((1.0, -1.0, -2.0), (1.0, 1.0, -2.0), (1.0, 1.0, -1.0), (1.0, -1.0, -1.0)),
+    ]
+    remaining_edge_l = BI._subtract_rects_from_face_3d(face3_a, face3_b, face3_c, face3_d, face3_n, shared_edge_l)
+    center_region = find_region_by_center(remaining_edge_l, 0.0, 0.0)
+    _, _, _, _, center_edges, center_corners = center_region
+    @test center_edges == (true, false, false, true)
+    @test center_corners == (true, true, false, true)
 end
 
 @testset "multi_dielectric_box3d" begin

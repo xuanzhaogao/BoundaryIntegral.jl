@@ -248,6 +248,25 @@ function _subtract_rects_from_face_3d(
         end
     end
 
+    # A grid point is physical if any surrounding cell is shared or out-of-bounds.
+    physical_corner = Matrix{Bool}(undef, nu + 1, nv + 1)
+    for gi in 1:(nu + 1)
+        for gj in 1:(nv + 1)
+            has_nonremaining = false
+            for (di, dj) in ((0, 0), (-1, 0), (0, -1), (-1, -1))
+                ci, cj = gi + di, gj + dj
+                if ci < 1 || ci > nu || cj < 1 || cj > nv
+                    has_nonremaining = true
+                    break
+                elseif cell_shared[ci, cj]
+                    has_nonremaining = true
+                    break
+                end
+            end
+            physical_corner[gi, gj] = has_nonremaining
+        end
+    end
+
     remaining = Tuple{NTuple{3,T}, NTuple{3,T}, NTuple{3,T}, NTuple{3,T}, NTuple{4,Bool}, NTuple{4,Bool}}[]
 
     for i in 1:nu
@@ -274,10 +293,10 @@ function _subtract_rects_from_face_3d(
             edge_cd = (j == nv) || cell_shared[i, j + 1]    # neighbor above
             edge_da = (i == 1)  || cell_shared[i - 1, j]    # neighbor left
 
-            corner_a = edge_da && edge_ab
-            corner_b = edge_ab && edge_bc
-            corner_c = edge_bc && edge_cd
-            corner_d = edge_cd && edge_da
+            corner_a = physical_corner[i, j]
+            corner_b = physical_corner[i + 1, j]
+            corner_c = physical_corner[i + 1, j + 1]
+            corner_d = physical_corner[i, j + 1]
 
             push!(remaining, (ra, rb, rc, rd,
                 (edge_ab, edge_bc, edge_cd, edge_da),
