@@ -269,12 +269,12 @@ Update the function signature at line 753 to add `fbc_N::Int = 64` keyword and p
 
 Change line 766-767 from:
 ```julia
-    max_depth::Int = 100,
+    max_depth::Int = 128,
     alpha::T = sqrt(T(2)),
 ```
 to:
 ```julia
-    max_depth::Int = 100,
+    max_depth::Int = 128,
     alpha::T = sqrt(T(2)),
     fbc_N::Int = 64,
 ```

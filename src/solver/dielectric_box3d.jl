@@ -208,3 +208,39 @@ function rhs_dielectric_box3d_hybrid(
     return -rhs
 end
 const Rhs_dielectric_box3d_hybrid = rhs_dielectric_box3d_hybrid # backward compat
+
+# --- Multi-box convenience overloads with automatic background screening ---
+
+function rhs_dielectric_box3d(
+    interface::DielectricInterface{P, T},
+    boxes::Vector{<:NamedTuple},
+    epses::Vector{T},
+    eps_out::T,
+    vs::VolumeSource{T, 3},
+) where {T, P <: FlatPanel{T, 3}}
+    return rhs_dielectric_box3d(interface, screened_volume_source(boxes, epses, eps_out, vs, SharpScreening()), one(T))
+end
+
+function rhs_dielectric_box3d_fmm3d(
+    interface::DielectricInterface{P, Float64},
+    boxes::Vector{<:NamedTuple},
+    epses::Vector{Float64},
+    eps_out::Float64,
+    vs::VolumeSource{Float64, 3},
+    thresh::Float64,
+) where {P <: FlatPanel{Float64, 3}}
+    return rhs_dielectric_box3d_fmm3d(interface, screened_volume_source(boxes, epses, eps_out, vs, SharpScreening()), 1.0, thresh)
+end
+
+function rhs_dielectric_box3d_hybrid(
+    interface::DielectricInterface{P, Float64},
+    boxes::Vector{<:NamedTuple},
+    epses::Vector{Float64},
+    eps_out::Float64,
+    vs::VolumeSource{Float64, 3},
+    fmm_tol::Float64;
+    tkm_kmax::Union{Nothing, Float64} = nothing,
+    h_factor::Float64 = 5.0,
+) where {P <: FlatPanel{Float64, 3}}
+    return rhs_dielectric_box3d_hybrid(interface, screened_volume_source(boxes, epses, eps_out, vs, SharpScreening()), 1.0, fmm_tol; tkm_kmax = tkm_kmax, h_factor = h_factor)
+end

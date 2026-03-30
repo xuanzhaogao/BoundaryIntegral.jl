@@ -299,7 +299,7 @@ function single_dielectric_box3d_rhs_adaptive(
     eps_in::T,
     eps_out::T,
     ::Type{T} = Float64;
-    max_depth::Int = 8,
+    max_depth::Int = 128,
     alpha::T = sqrt(T(2)),
 ) where T
     quads, normals = _box3d_face_quads(Lx, Ly, Lz)
@@ -339,7 +339,7 @@ function single_dielectric_box3d_rhs_adaptive_varquad(
     eps_in::T,
     eps_out::T,
     ::Type{T} = Float64;
-    max_depth::Int = 8,
+    max_depth::Int = 128,
     alpha::T = sqrt(T(2)),
     n_quad_min::Int = 2,
 ) where T
@@ -382,7 +382,7 @@ function single_dielectric_box3d_rhs_adaptive(
     eps_in::T,
     eps_out::T,
     ::Type{T} = Float64;
-    max_depth::Int = 100,
+    max_depth::Int = 128,
     alpha::T = sqrt(T(2)),
 ) where T
     rhs(p, n) = -ps.charge * laplace3d_grad(ps.point, p, n) / eps_src
@@ -414,7 +414,7 @@ function single_dielectric_box3d_rhs_adaptive(
     eps_in::T,
     eps_out::T,
     ::Type{T} = Float64;
-    max_depth::Int = 100,
+    max_depth::Int = 128,
     alpha::T = sqrt(T(2)),
     tkm_kmax::Union{Nothing, T} = nothing,
 ) where T
@@ -487,7 +487,7 @@ function single_dielectric_box3d_rhs_adaptive_varquad(
     eps_in::T,
     eps_out::T,
     ::Type{T} = Float64;
-    max_depth::Int = 100,
+    max_depth::Int = 128,
     alpha::T = sqrt(T(2)),
     n_quad_min::Int = 2,
 ) where T

@@ -361,6 +361,76 @@ function screened_volume_source(
     return VolumeSource(copy(vs.positions), copy(vs.weights), rho)
 end
 
+function _screened_volume_density_multibox(
+    vs::VolumeSource{T, 3},
+    boxes::Vector{<:NamedTuple},
+    epses::Vector{T},
+    eps_out::T,
+    mode::SharpScreening,
+    tol::T,
+) where {T}
+    n_boxes = length(boxes)
+    rho = similar(vs.density)
+    for s in eachindex(vs.density)
+        pos = volume_source_point(vs, s)
+        eps_local = eps_out
+        for b in 1:n_boxes
+            box = boxes[b]
+            min_corner = (box.center[1] - box.Lx / 2, box.center[2] - box.Ly / 2, box.center[3] - box.Lz / 2)
+            max_corner = (box.center[1] + box.Lx / 2, box.center[2] + box.Ly / 2, box.center[3] + box.Lz / 2)
+            if _point_in_box(pos, min_corner, max_corner, tol)
+                eps_local = epses[b]
+                break
+            end
+        end
+        rho[s] = vs.density[s] / eps_local
+    end
+    return rho
+end
+
+function _screened_volume_density_multibox(
+    vs::VolumeSource{T, 3},
+    boxes::Vector{<:NamedTuple},
+    epses::Vector{T},
+    eps_out::T,
+    mode::Union{SoftMixPermittivity, SoftMixInversePermittivity},
+    tol::T,
+) where {T}
+    n_boxes = length(boxes)
+    rho = similar(vs.density)
+    for s in eachindex(vs.density)
+        pos = volume_source_point(vs, s)
+        eps_local = eps_out
+        for b in 1:n_boxes
+            box = boxes[b]
+            min_corner = (box.center[1] - box.Lx / 2, box.center[2] - box.Ly / 2, box.center[3] - box.Lz / 2)
+            max_corner = (box.center[1] + box.Lx / 2, box.center[2] + box.Ly / 2, box.center[3] + box.Lz / 2)
+            eps_local = _screened_permittivity(mode, pos, min_corner, max_corner, epses[b], eps_local, tol)
+        end
+        rho[s] = vs.density[s] / eps_local
+    end
+    return rho
+end
+
+function screened_volume_source(
+    boxes::Vector{<:NamedTuple},
+    epses::Vector{T},
+    eps_out::T,
+    vs::VolumeSource{T, 3},
+    mode::AbstractScreeningMode;
+    tol::T = begin
+        max_dim = zero(T)
+        for box in boxes
+            max_dim = max(max_dim, max(abs(box.Lx), abs(box.Ly), abs(box.Lz)))
+        end
+        sqrt(eps(T)) * max_dim
+    end,
+) where {T}
+    length(boxes) == length(epses) || throw(ArgumentError("Number of boxes must match number of permittivities"))
+    rho = _screened_volume_density_multibox(vs, boxes, epses, eps_out, mode, tol)
+    return VolumeSource(copy(vs.positions), copy(vs.weights), rho)
+end
+
 function GaussianVolumeSource(center::NTuple{3, T}, σ::T, n::Int, tol::T) where T
     @assert n >= 1 "n must be >= 1"
     @assert σ > zero(T) "σ must be > 0"
