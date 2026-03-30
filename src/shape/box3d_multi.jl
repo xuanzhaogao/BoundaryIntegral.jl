@@ -392,7 +392,7 @@ function multi_dielectric_box3d_rhs_adaptive(
     rhs::Function,
     rhs_atol::T,
     eps_out::T = one(T);
-    max_depth::Int = 8,
+    max_depth::Int = 128,
     alpha::T = T(sqrt(T(2))),
 ) where T
     @assert length(boxes) == length(epses) "Number of boxes must match number of permittivities"
@@ -424,7 +424,7 @@ function multi_dielectric_box3d_rhs_adaptive(
     eps_src::T,
     rhs_atol::T,
     eps_out::T = one(T);
-    max_depth::Int = 100,
+    max_depth::Int = 128,
     alpha::T = T(sqrt(T(2))),
 ) where T
     rhs(p, n) = -ps.charge * laplace3d_grad(ps.point, p, n) / eps_src
@@ -439,10 +439,28 @@ function multi_dielectric_box3d_rhs_adaptive(
     boxes::Vector{<:NamedTuple},
     epses::Vector{T},
     vs::VolumeSource{T, 3},
+    rhs_atol::T;
+    eps_out::T = one(T),
+    max_depth::Int = 128,
+    alpha::T = T(sqrt(T(2))),
+    tkm_kmax::Union{Nothing, T} = nothing,
+) where T
+    screened_vs = screened_volume_source(boxes, epses, eps_out, vs, SharpScreening())
+    return multi_dielectric_box3d_rhs_adaptive(
+        n_quad, l_ec, boxes, epses, screened_vs, one(T), rhs_atol, eps_out;
+        max_depth = max_depth, alpha = alpha, tkm_kmax = tkm_kmax,
+    )
+end
+
+function multi_dielectric_box3d_rhs_adaptive(
+    n_quad::Int, l_ec::T,
+    boxes::Vector{<:NamedTuple},
+    epses::Vector{T},
+    vs::VolumeSource{T, 3},
     eps_src::T,
     rhs_atol::T,
     eps_out::T = one(T);
-    max_depth::Int = 100,
+    max_depth::Int = 128,
     alpha::T = T(sqrt(T(2))),
     tkm_kmax::Union{Nothing, T} = nothing,
 ) where T
@@ -450,20 +468,104 @@ function multi_dielectric_box3d_rhs_adaptive(
     @assert length(boxes) >= 1 "At least one box is required"
 
     regions = _multi_box3d_face_regions(boxes, epses, eps_out)
+    n_regions = length(regions)
+
+    ns, ws = gausslegendre(n_quad)
+    ns = T.(ns)
+    ws = T.(ws)
+    max_depth = max(max_depth, 0)
+    fmm_tol = rhs_atol * T(0.1)
+    h = _estimate_source_spacing(vs)
+    resolved_tkm_kmax = isnothing(tkm_kmax) ? _estimate_tkm3dc_kmax(h) : tkm_kmax
+    resolved_tkm_kmax > zero(T) || throw(ArgumentError("tkm_kmax must be positive"))
+
+    @info "multi_dielectric_box3d rhs adaptive: $n_regions face regions, $(length(vs.density)) source points"
+
+    # Initialize panels at depth 0 for each region
+    panels_by_depth = [[TempPanel3D{T}[] for _ in 0:max_depth] for _ in 1:n_regions]
+    for (r, (ra, rb, rc, rd, fn, ei, eo, ie, ic)) in enumerate(regions)
+        Lab = norm(rb .- ra)
+        Lda = norm(ra .- rd)
+        n_divide_x, n_divide_y = best_grid_mn(Lab, Lda, alpha)
+        rough = divide_temp_panel3d(
+            TempPanel3D(ra, rb, rc, rd, ic[1], ic[2], ic[3], ic[4], ie[1], ie[2], ie[3], ie[4], fn),
+            n_divide_x, n_divide_y,
+        )
+        for tpl in rough
+            push!(panels_by_depth[r][1], tpl)
+        end
+    end
+
+    fine_panels = [TempPanel3D{T}[] for _ in 1:n_regions]
+
+    # Process all regions together at each depth — one FMM call per depth level
+    for depth in 0:max_depth
+        all_panels = TempPanel3D{T}[]
+        counts = Int[]
+        for r in 1:n_regions
+            cnt = length(panels_by_depth[r][depth + 1])
+            append!(all_panels, panels_by_depth[r][depth + 1])
+            push!(counts, cnt)
+        end
+
+        isempty(all_panels) && continue
+
+        if depth >= max_depth
+            for r in 1:n_regions
+                append!(fine_panels[r], panels_by_depth[r][depth + 1])
+            end
+            continue
+        end
+
+        @info "  depth $depth, panels: $(length(all_panels))"
+        resolved = _rhs_panel3d_resolved_volume_fmm(
+            all_panels, vs, eps_src, ns, ws, rhs_atol, fmm_tol, h, resolved_tkm_kmax,
+        )
+
+        offset = 0
+        for r in 1:n_regions
+            for k in 1:counts[r]
+                i = offset + k
+                tpl = all_panels[i]
+                if resolved[i]
+                    push!(fine_panels[r], tpl)
+                else
+                    for child in divide_temp_panel3d(tpl, 2, 2)
+                        push!(panels_by_depth[r][depth + 2], child)
+                    end
+                end
+            end
+            offset += counts[r]
+        end
+    end
 
     panels_vec = Vector{FlatPanel{T, 3}}()
     eps_in_vec = Vector{T}()
     eps_out_vec = Vector{T}()
 
-    resolved_tkm_kmax = isnothing(tkm_kmax) ? _estimate_tkm3dc_kmax(vs) : tkm_kmax
+    for (r, (ra, rb, rc, rd, fn, ei, eo, ie, ic)) in enumerate(regions)
+        rough_ec = copy(fine_panels[r])
+        refined = TempPanel3D{T}[]
+        while !isempty(rough_ec)
+            tpl = popfirst!(rough_ec)
+            has_ec = tpl.is_a_corner || tpl.is_b_corner || tpl.is_c_corner || tpl.is_d_corner ||
+                tpl.is_ab_edge || tpl.is_bc_edge || tpl.is_cd_edge || tpl.is_da_edge
+            L_ab = norm(tpl.b .- tpl.a)
+            L_da = norm(tpl.a .- tpl.d)
+            if has_ec && max(L_ab, L_da) > l_ec
+                append!(rough_ec, divide_temp_panel3d(tpl, 2, 2))
+            else
+                push!(refined, tpl)
+            end
+        end
 
-    for (ra, rb, rc, rd, fn, ei, eo, ie, ic) in regions
-        new_panels = rect_panel3d_rhs_adaptive_panels(
-            ra, rb, rc, rd, n_quad, vs, eps_src, fn, ie, ic, alpha, l_ec, rhs_atol, max_depth, resolved_tkm_kmax;
-        )
-        append!(panels_vec, new_panels)
-        append!(eps_in_vec, fill(ei, length(new_panels)))
-        append!(eps_out_vec, fill(eo, length(new_panels)))
+        for tpl in refined
+            is_edge_flag = tpl.is_ab_edge || tpl.is_bc_edge || tpl.is_cd_edge || tpl.is_da_edge ||
+                tpl.is_a_corner || tpl.is_b_corner || tpl.is_c_corner || tpl.is_d_corner
+            push!(panels_vec, rect_panel3d_discretize(tpl.a, tpl.b, tpl.c, tpl.d, ns, ws, tpl.normal; is_edge = is_edge_flag))
+        end
+        append!(eps_in_vec, fill(ei, length(refined)))
+        append!(eps_out_vec, fill(eo, length(refined)))
     end
 
     return DielectricInterface(panels_vec, eps_in_vec, eps_out_vec)
