@@ -393,21 +393,60 @@ function _screened_volume_density_multibox(
     boxes::Vector{<:NamedTuple},
     epses::Vector{T},
     eps_out::T,
-    mode::Union{SoftMixPermittivity, SoftMixInversePermittivity},
+    mode::SoftMixPermittivity,
     tol::T,
 ) where {T}
+    # Partition-of-unity formula: eps_eff = sum_b eps_b * P_b + eps_out * (1 - sum_b P_b)
+    # where P_b = _box_screen(...) is the smooth indicator for box b.
+    # This is order-independent by construction.
     n_boxes = length(boxes)
+    bandwidth = T(mode.bandwidth)
     rho = similar(vs.density)
     for s in eachindex(vs.density)
         pos = volume_source_point(vs, s)
-        eps_local = eps_out
+        weighted_eps = zero(T)
+        sum_P = zero(T)
         for b in 1:n_boxes
             box = boxes[b]
             min_corner = (box.center[1] - box.Lx / 2, box.center[2] - box.Ly / 2, box.center[3] - box.Lz / 2)
             max_corner = (box.center[1] + box.Lx / 2, box.center[2] + box.Ly / 2, box.center[3] + box.Lz / 2)
-            eps_local = _screened_permittivity(mode, pos, min_corner, max_corner, epses[b], eps_local, tol)
+            P = _box_screen(pos, min_corner, max_corner, bandwidth)
+            weighted_eps += epses[b] * P
+            sum_P += P
         end
+        eps_local = weighted_eps + eps_out * (one(T) - sum_P)
         rho[s] = vs.density[s] / eps_local
+    end
+    return rho
+end
+
+function _screened_volume_density_multibox(
+    vs::VolumeSource{T, 3},
+    boxes::Vector{<:NamedTuple},
+    epses::Vector{T},
+    eps_out::T,
+    mode::SoftMixInversePermittivity,
+    tol::T,
+) where {T}
+    # Partition-of-unity formula: 1/eps_eff = sum_b P_b/eps_b + (1 - sum_b P_b)/eps_out
+    # This is order-independent by construction.
+    n_boxes = length(boxes)
+    bandwidth = T(mode.bandwidth)
+    rho = similar(vs.density)
+    for s in eachindex(vs.density)
+        pos = volume_source_point(vs, s)
+        weighted_inv_eps = zero(T)
+        sum_P = zero(T)
+        for b in 1:n_boxes
+            box = boxes[b]
+            min_corner = (box.center[1] - box.Lx / 2, box.center[2] - box.Ly / 2, box.center[3] - box.Lz / 2)
+            max_corner = (box.center[1] + box.Lx / 2, box.center[2] + box.Ly / 2, box.center[3] + box.Lz / 2)
+            P = _box_screen(pos, min_corner, max_corner, bandwidth)
+            weighted_inv_eps += P / epses[b]
+            sum_P += P
+        end
+        inv_eps_local = weighted_inv_eps + (one(T) - sum_P) / eps_out
+        rho[s] = vs.density[s] * inv_eps_local
     end
     return rho
 end

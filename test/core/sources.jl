@@ -179,3 +179,55 @@ end
     end
     @test max_err <= 1e-10
 end
+
+@testset "screened_volume_source SoftMix multibox is order-independent" begin
+    # Boxes share a face at x=0; with bw=0.5 their erf halos overlap near x=0.
+    # The old sequential code gives different answers depending on box order at
+    # the midpoint — the new partition-of-unity code must not.
+    box1 = (center = (-0.5, 0.0, 0.0), Lx = 1.0, Ly = 1.0, Lz = 1.0)
+    box2 = (center = ( 0.5, 0.0, 0.0), Lx = 1.0, Ly = 1.0, Lz = 1.0)
+    eps1, eps2, eps0 = 2.0, 4.0, 1.0
+    bw = 0.5  # wide enough that both halos are nonzero at the midpoint
+
+    # Include the midpoint (0,0,0) which sits in the halo overlap of both boxes
+    points = [(-0.5, 0.0, 0.0), (0.5, 0.0, 0.0), (0.0, 0.0, 0.0), (5.0, 0.0, 0.0)]
+    vs = VolumeSource(points, ones(length(points)), ones(length(points)))
+
+    for mode in [SoftMixPermittivity(bw), SoftMixInversePermittivity(bw)]
+        sv_12 = screened_volume_source([box1, box2], [eps1, eps2], eps0, vs, mode)
+        sv_21 = screened_volume_source([box2, box1], [eps2, eps1], eps0, vs, mode)
+        # Order must not matter — this is the key property being tested
+        @test sv_12.density ≈ sv_21.density atol=1e-12
+    end
+end
+
+@testset "screened_volume_source SoftMix multibox matches partition-of-unity formula" begin
+    # Same overlapping geometry — verify the output equals the closed-form POU formula
+    box1 = (center = (-0.5, 0.0, 0.0), Lx = 1.0, Ly = 1.0, Lz = 1.0)
+    box2 = (center = ( 0.5, 0.0, 0.0), Lx = 1.0, Ly = 1.0, Lz = 1.0)
+    eps1, eps2, eps0 = 2.0, 4.0, 1.0
+    bw = 0.5
+
+    points = [(-0.5, 0.0, 0.0), (0.5, 0.0, 0.0), (0.0, 0.0, 0.0), (5.0, 0.0, 0.0)]
+    vs = VolumeSource(points, ones(length(points)), ones(length(points)))
+
+    function box_screen(pos, box, bw)
+        mn = (box.center[1] - box.Lx/2, box.center[2] - box.Ly/2, box.center[3] - box.Lz/2)
+        mx = (box.center[1] + box.Lx/2, box.center[2] + box.Ly/2, box.center[3] + box.Lz/2)
+        smooth(d) = (1 + erf(d / bw)) / 2
+        return prod(smooth(pos[i] - mn[i]) * smooth(mx[i] - pos[i]) for i in 1:3)
+    end
+
+    for (mode, inv_eps_fn) in [
+        (SoftMixPermittivity(bw),        (P1, P2) -> inv(eps1*P1 + eps2*P2 + eps0*(1-P1-P2))),
+        (SoftMixInversePermittivity(bw), (P1, P2) -> P1/eps1 + P2/eps2 + (1-P1-P2)/eps0),
+    ]
+        sv = screened_volume_source([box1, box2], [eps1, eps2], eps0, vs, mode)
+        for (idx, pt) in enumerate(points)
+            P1 = box_screen(pt, box1, bw)
+            P2 = box_screen(pt, box2, bw)
+            expected_inv_eps = inv_eps_fn(P1, P2)
+            @test sv.density[idx] ≈ expected_inv_eps atol=1e-12
+        end
+    end
+end
