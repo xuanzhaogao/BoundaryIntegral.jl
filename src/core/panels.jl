@@ -7,6 +7,8 @@ struct FlatPanel{T, D} <: AbstractPanel
     normal::NTuple{D, T}
     corners::Vector{NTuple{D, T}} # corners are arranged in a anti-clockwise order (lb, rb, rt, lt)
     is_edge::Bool
+    is_singular::Bool
+    singular_exponent::T
 
     # quadrature information (same order in each tangential direction)
     n_quad::Int
@@ -21,10 +23,16 @@ struct FlatPanel{T, D} <: AbstractPanel
     bary_weights::Vector{T}
 end
 
-# Convenience constructor: computes barycentric weights automatically
+# Convenience constructor: computes barycentric weights automatically (backward-compatible)
 function FlatPanel(normal::NTuple{D,T}, corners, is_edge, n_quad, gl_xs, gl_ws, points, weights) where {T, D}
     bary_weights = gl_barycentric_weights(gl_xs, gl_ws)
-    return FlatPanel{T,D}(normal, corners, is_edge, n_quad, gl_xs, gl_ws, points, weights, bary_weights)
+    return FlatPanel{T,D}(normal, corners, is_edge, false, zero(T), n_quad, gl_xs, gl_ws, points, weights, bary_weights)
+end
+
+# Constructor with singular panel fields
+function FlatPanel(normal::NTuple{D,T}, corners, is_edge, is_singular, singular_exponent, n_quad, gl_xs, gl_ws, points, weights) where {T, D}
+    bary_weights = gl_barycentric_weights(gl_xs, gl_ws)
+    return FlatPanel{T,D}(normal, corners, is_edge, is_singular, singular_exponent, n_quad, gl_xs, gl_ws, points, weights, bary_weights)
 end
 
 Base.show(io::IO, p::FlatPanel{T, D}) where {T, D} = print(io, "FlatPanel in $D-dimensional space, with $(p.n_quad) quadrature points in $T")
