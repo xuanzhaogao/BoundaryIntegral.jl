@@ -6,6 +6,7 @@ using FastGaussQuadrature, LegendrePolynomials, SpecialFunctions
 using Krylov, LinearMaps, HCubature
 using NearestNeighbors
 using ForwardDiff
+using Roots
 
 using FMM2D, FMM3D
 using TKM3D
@@ -51,6 +52,9 @@ export Rhs_dielectric_box3d, Rhs_dielectric_box3d_fmm3d, Rhs_dielectric_box3d_hy
 
 # linear algebra
 export solve_lu, solve_gmres
+
+# corner singularity
+export corner_singularity_power, corner_singularity_power_multi
 
 # visualization
 export viz_2d, viz_3d
