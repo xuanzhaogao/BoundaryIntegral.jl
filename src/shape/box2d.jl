@@ -22,6 +22,23 @@ function line_panel2d_discretize(a::NTuple{2, T}, b::NTuple{2, T}, ns::Vector{T}
     return FlatPanel(normal, [a, b], is_edge, length(ns), ns, ws, points, weights)
 end
 
+# 1d line panel with Gauss-Jacobi quadrature for singular density near endpoint a
+function line_panel2d_singular_discretize(a::NTuple{2, T}, b::NTuple{2, T}, n_quad::Int, exponent::T, normal::NTuple{2, T}; is_edge::Bool = true) where T
+    gj_xs, gj_ws = gaussjacobi(n_quad, 0.0, Float64(exponent))
+    gj_xs = T.(gj_xs)
+    gj_ws = T.(gj_ws)
+
+    points = [(b .+ a) ./ 2 .+ gj_xs[i] .* (b .- a) ./ 2 for i in 1:n_quad]
+    L = norm(b .- a)
+    weights = gj_ws .* L ./ 2
+
+    @assert norm(normal) ≈ 1 "Normal is not a unit vector"
+    @assert dot(normal, b .- a) < 1e-10 "Normal is not perpendicular to the line segment"
+
+    bary_ws = gj_barycentric_weights(gj_xs)
+    return FlatPanel{T,2}(normal, [a, b], is_edge, true, exponent, n_quad, gj_xs, gj_ws, points, weights, bary_ws)
+end
+
 # divide the panel into two smaller panels
 function divide_temp_panel2d(tpl::TempPanel2D{T}, n_divide::Int) where T
     @assert n_divide >= 2 "n_divide must be greater than or equal to 2"
@@ -41,7 +58,7 @@ end
 
 # assume that the input is the starting and ending points of a line, which is to be divided into a vector of panels
 # l_panel is the maximum length of a none-corner panel, l_corner is the maximum length of a corner panel
-function straight_line_adaptive_panels(sp::NTuple{2, T}, ep::NTuple{2, T}, ns::Vector{T}, ws::Vector{T}, normal::NTuple{2, T}, l_panel::T, l_corner::T) where T
+function straight_line_adaptive_panels(sp::NTuple{2, T}, ep::NTuple{2, T}, ns::Vector{T}, ws::Vector{T}, normal::NTuple{2, T}, l_panel::T, l_corner::T; use_singular::Bool=false, singular_exponent::T=zero(T)) where T
 
     l_line = norm(ep .- sp)
     n_divide_rough = ceil(Int, l_line / l_panel)
@@ -69,22 +86,41 @@ function straight_line_adaptive_panels(sp::NTuple{2, T}, ep::NTuple{2, T}, ns::V
     end
 
     # discretize the fine panels
+    n_quad = length(ns)
     panels = Vector{FlatPanel{T, 2}}()
     for tpl in fine_panels
-        push!(panels, line_panel2d_discretize(tpl.a, tpl.b, ns, ws, tpl.normal))
+        if use_singular && (tpl.is_a_corner || tpl.is_b_corner)
+            # For corner panels, use GJ quadrature with singularity at endpoint a
+            if tpl.is_a_corner
+                # Singularity at tpl.a which maps to t=-1, correct orientation
+                push!(panels, line_panel2d_singular_discretize(tpl.a, tpl.b, n_quad, singular_exponent, tpl.normal))
+            else
+                # is_b_corner: singularity at tpl.b, flip endpoints so singularity is at a
+                push!(panels, line_panel2d_singular_discretize(tpl.b, tpl.a, n_quad, singular_exponent, tpl.normal))
+            end
+        else
+            push!(panels, line_panel2d_discretize(tpl.a, tpl.b, ns, ws, tpl.normal))
+        end
     end
 
     return panels
 end
 
-function single_dielectric_box2d(Lx::T, Ly::T, n_quad::Int, l_panel::T, l_corner::T, eps_in::T, eps_out::T, ::Type{T} = Float64) where T
+function single_dielectric_box2d(Lx::T, Ly::T, n_quad::Int, l_panel::T, l_corner::T, eps_in::T, eps_out::T, ::Type{T} = Float64; use_singular::Bool=false) where T
     ns, ws = gausslegendre(n_quad)
     hx = Lx / 2
     hy = Ly / 2
     t0 = zero(T)
+
+    sing_exp = zero(T)
+    if use_singular
+        gamma = corner_singularity_power(T(pi)/2, eps_in, eps_out)
+        sing_exp = T(gamma - 1)
+    end
+
     panels = Vector{FlatPanel{T, 2}}()
     for (sp, ep, normal) in zip([(-hx, hy), (hx, hy), (hx, -hy), (-hx, -hy)], [(hx, hy), (hx, -hy), (-hx, -hy), (-hx, hy)], [(t0, one(T)), (one(T), t0), (t0, -one(T)), (-one(T), t0)])
-        append!(panels, straight_line_adaptive_panels(sp, ep, ns, ws, normal, l_panel, l_corner))
+        append!(panels, straight_line_adaptive_panels(sp, ep, ns, ws, normal, l_panel, l_corner; use_singular=use_singular, singular_exponent=sing_exp))
     end
 
     return DielectricInterface(panels, fill(eps_in, length(panels)), fill(eps_out, length(panels)))
