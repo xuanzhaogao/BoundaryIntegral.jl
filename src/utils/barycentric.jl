@@ -120,3 +120,23 @@ function interp_matrix_2d_gl_tensor(x::AbstractVector, wx::AbstractVector,
     Ey = interp_matrix_1d_gl(y, wy, Yout)
     return kron(Ey, Ex)
 end
+
+# --------------------------
+# General barycentric weights for arbitrary nodes (e.g. Gauss-Jacobi)
+# λ_j = 1 / prod_{k ≠ j} (x_j - x_k)
+# Normalized by maximum absolute value for numerical stability.
+# --------------------------
+function gj_barycentric_weights(x::AbstractVector{T}) where T
+    n = length(x)
+    TF = float(T)
+    λ = ones(TF, n)
+    @inbounds for j in 1:n
+        for k in 1:n
+            k == j && continue
+            λ[j] *= TF(x[j]) - TF(x[k])
+        end
+        λ[j] = one(TF) / λ[j]
+    end
+    λ ./= maximum(abs, λ)
+    return λ
+end
