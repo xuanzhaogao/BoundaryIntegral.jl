@@ -68,6 +68,7 @@ include("core/sources.jl")
 
 # kernel functions
 include("kernel/laplace2d.jl")
+include("kernel/laplace2d_near_singular.jl")
 include("kernel/laplace3d.jl")
 include("kernel/laplace3d_near.jl")
 include("kernel/laplace3d_near_upsampling.jl")

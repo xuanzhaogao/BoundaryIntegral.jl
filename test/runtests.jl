@@ -23,6 +23,7 @@ using Test
     include("kernel/laplace2d.jl")
     include("kernel/laplace3d.jl")
     include("kernel/laplace3d_near_smoke.jl")
+    include("kernel/laplace2d_near_singular.jl")
 
     # shape functions
     if run_full
