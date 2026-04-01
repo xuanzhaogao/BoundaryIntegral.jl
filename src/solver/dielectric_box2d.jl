@@ -16,7 +16,14 @@ function lhs_dielectric_box2d(interface::DielectricInterface{P, T}) where {P <: 
         n_pts = num_points(panel)
         t = 0.5 * (eps_out + eps_in) / (eps_out - eps_in)
         for j in 1:n_pts
-            Lhs[offset + j, offset + j] += t
+            if panel.is_singular
+                # The unknown on GJ panels is sigma_bare where sigma = sigma_bare * (1+t)^alpha.
+                # The jump relation involves sigma(x_j), so scale the diagonal by (1+t_j)^alpha.
+                factor = (1 + panel.gl_xs[j])^panel.singular_exponent
+                Lhs[offset + j, offset + j] += t * factor
+            else
+                Lhs[offset + j, offset + j] += t
+            end
         end
         offset += n_pts
     end
@@ -45,7 +52,12 @@ function lhs_dielectric_box2d_fmm2d(interface::DielectricInterface{P, T}, tol::F
             n_pts = num_points(panel)
             t = 0.5 * (eps_out + eps_in) / (eps_out - eps_in)
             for j in 1:n_pts
-                Dx[offset + j] += t * x[offset + j]
+                if panel.is_singular
+                    factor = (1 + panel.gl_xs[j])^panel.singular_exponent
+                    Dx[offset + j] += t * factor * x[offset + j]
+                else
+                    Dx[offset + j] += t * x[offset + j]
+                end
             end
             offset += n_pts
         end
