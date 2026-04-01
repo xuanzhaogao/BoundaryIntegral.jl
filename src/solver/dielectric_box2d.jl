@@ -1,6 +1,13 @@
 function lhs_dielectric_box2d(interface::DielectricInterface{P, T}) where {P <: AbstractPanel, T}
     D_transpose = laplace2d_DT(interface)
     Lhs = D_transpose
+    has_singular = any(p -> p.is_singular, interface.panels)
+    if has_singular
+        corrections = laplace2d_near_singular_corrections(interface)
+        for (delta_A, src_range, trg_range) in corrections
+            Lhs[trg_range, src_range] .+= delta_A
+        end
+    end
     offset = 0
     for i in 1:length(interface.panels)
         panel = interface.panels[i]
@@ -19,9 +26,16 @@ const Lhs_dielectric_box2d = lhs_dielectric_box2d # backward compat
 
 function lhs_dielectric_box2d_fmm2d(interface::DielectricInterface{P, T}, tol::Float64 = 1e-12) where {P <: AbstractPanel, T}
     D_transpose = laplace2d_DT_fmm2d(interface, tol)
+    has_singular = any(p -> p.is_singular, interface.panels)
+    corrections = has_singular ? laplace2d_near_singular_corrections(interface) : nothing
 
     function g(x)
         Dx = D_transpose * x
+        if corrections !== nothing
+            for (delta_A, src_range, trg_range) in corrections
+                Dx[trg_range] .+= delta_A * x[src_range]
+            end
+        end
 
         offset = 0
         for i in 1:length(interface.panels)

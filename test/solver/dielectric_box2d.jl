@@ -30,6 +30,29 @@ using Test
     end
 end
 
+@testset "dielectric_box2d with singular panels" begin
+    eps_box = 5.0
+    box = BI.single_dielectric_box2d(1.0, 1.0, 8, 0.2, 0.05, eps_box, 1.0, Float64; use_singular=true)
+    lhs = BI.lhs_dielectric_box2d(box)
+    lhs_fmm2d = BI.lhs_dielectric_box2d_fmm2d(box, 1e-12)
+    rhs = BI.rhs_dielectric_box2d(box, BI.PointSource((0.1, 0.1), 1.0), eps_box)
+    ws = BI.all_weights(box)
+
+    x = BI.solve_lu(lhs, rhs)
+    @test norm(lhs * x - rhs) < 1e-10
+    total_flux = dot(ws, x)
+    @test isapprox(total_flux + 1.0 / eps_box, 1.0, atol = 0.05)
+
+    x_gmres = BI.solve_gmres(lhs_fmm2d, rhs, 1e-12, 1e-12)
+    @test norm(lhs_fmm2d * x_gmres - rhs) < 1e-10
+    total_flux_gmres = dot(ws, x_gmres)
+    @test isapprox(total_flux_gmres + 1.0 / eps_box, 1.0, atol = 0.05)
+
+    # Dense and FMM should agree closely
+    x_trial = randn(BI.num_points(box))
+    @test norm(lhs * x_trial - lhs_fmm2d * x_trial) < 1e-9
+end
+
 @testset "dielectric_box multi_box2d" begin
     rects_vec = [[BI.square(0.0, 0.0), BI.square(1.0, 0.0)], [BI.square(0.0, 0.0), BI.square(1.0, 0.0), BI.square(0.5, 1.0)]]
     epses_vec = [[2.0, 3.0], [2.0, 3.0, 4.0]]
