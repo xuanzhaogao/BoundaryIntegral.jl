@@ -104,9 +104,12 @@ function viz_3d!(
     fill_highlight::Bool = true,
     fill_neighbors::Bool = true,
     fill_alpha = 0.3,
+    neighbor_colormap = :viridis,
+    neighbor_colorrange::Union{Nothing, Tuple} = nothing,
 ) where {P <: AbstractPanel, T}
     t = 0.2
     neighbor_indices = Set{Int}()
+    neighbor_orders = Dict{Int, Int}()
     if highlight_panel !== nothing
         n_panels = length(interface.panels)
         (1 <= highlight_panel <= n_panels) || throw(ArgumentError("highlight_panel must be between 1 and $(n_panels)"))
@@ -116,9 +119,27 @@ function viz_3d!(
             end
             neighbor_list = build_neighbor_list(interface, neighbor_max_order, neighbor_atol, true, true)
         end
-        for ((i, j), _) in neighbor_list
+        for ((i, j), ord) in neighbor_list
             i == highlight_panel || continue
             push!(neighbor_indices, j)
+            neighbor_orders[j] = ord
+        end
+    end
+
+    use_neighbor_colormap = neighbor_colormap !== nothing && !isempty(neighbor_orders)
+    nbr_cr = (0f0, 1f0)
+    if use_neighbor_colormap
+        if neighbor_colorrange === nothing
+            olo = Float32(minimum(values(neighbor_orders)))
+            ohi = Float32(maximum(values(neighbor_orders)))
+            if olo == ohi
+                d = max(abs(olo), 1f0) * 1f-6
+                nbr_cr = (olo - d, ohi + d)
+            else
+                nbr_cr = (olo, ohi)
+            end
+        else
+            nbr_cr = (Float32(neighbor_colorrange[1]), Float32(neighbor_colorrange[2]))
         end
     end
 
@@ -143,6 +164,9 @@ function viz_3d!(
     fill_faces_highlight = gb.TriangleFace[]
     fill_vertices_neighbor = gb.Point3f[]
     fill_faces_neighbor = gb.TriangleFace[]
+    fill_colors_neighbor = Float32[]
+    line_colors_neighbor = Float32[]
+    point_colors_neighbor = Float32[]
 
     function panel_group(panel_idx, panel)
         if highlight_panel !== nothing
@@ -184,7 +208,16 @@ function viz_3d!(
     for (panel_idx, panel) in enumerate(interface.panels)
         a, b, c, d = panel.corners
         group = panel_group(panel_idx, panel)
+        n_line_pts_before = length(line_groups[group])
         append_quad!(line_groups[group], a, b, c, d)
+        n_line_pts_added = length(line_groups[group]) - n_line_pts_before
+
+        if group == :neighbor && use_neighbor_colormap
+            cval = Float32(get(neighbor_orders, panel_idx, 0))
+            for _ in 1:n_line_pts_added
+                push!(line_colors_neighbor, cval)
+            end
+        end
 
         if fill_highlight && highlight_panel !== nothing
             should_fill = panel_idx == highlight_panel || (fill_neighbors && panel_idx in neighbor_indices)
@@ -192,7 +225,14 @@ function viz_3d!(
                 if panel_idx == highlight_panel
                     append_fill!(fill_vertices_highlight, fill_faces_highlight, a, b, c, d)
                 elseif panel_idx in neighbor_indices
+                    n_v_before = length(fill_vertices_neighbor)
                     append_fill!(fill_vertices_neighbor, fill_faces_neighbor, a, b, c, d)
+                    if use_neighbor_colormap
+                        cval = Float32(get(neighbor_orders, panel_idx, 0))
+                        for _ in 1:(length(fill_vertices_neighbor) - n_v_before)
+                            push!(fill_colors_neighbor, cval)
+                        end
+                    end
                 end
             end
         end
@@ -200,6 +240,12 @@ function viz_3d!(
         if show_points
             for p in panel.points
                 push!(point_groups[group], gb.Point3f(p[1], p[2], p[3]))
+            end
+            if group == :neighbor && use_neighbor_colormap
+                cval = Float32(get(neighbor_orders, panel_idx, 0))
+                for _ in 1:length(panel.points)
+                    push!(point_colors_neighbor, cval)
+                end
             end
         end
 
@@ -217,8 +263,21 @@ function viz_3d!(
     if !isempty(fill_faces_highlight)
         mesh!(ax, gb.Mesh(fill_vertices_highlight, fill_faces_highlight), color = (highlight_color, fill_alpha), transparency = true)
     end
+    neighbor_plot = nothing
     if !isempty(fill_faces_neighbor)
-        mesh!(ax, gb.Mesh(fill_vertices_neighbor, fill_faces_neighbor), color = (neighbor_color, fill_alpha), transparency = true)
+        if use_neighbor_colormap
+            neighbor_plot = mesh!(
+                ax,
+                gb.Mesh(fill_vertices_neighbor, fill_faces_neighbor);
+                color = fill_colors_neighbor,
+                colormap = neighbor_colormap,
+                colorrange = nbr_cr,
+                alpha = fill_alpha,
+                transparency = true,
+            )
+        else
+            mesh!(ax, gb.Mesh(fill_vertices_neighbor, fill_faces_neighbor), color = (neighbor_color, fill_alpha), transparency = true)
+        end
     end
 
     if !isempty(line_groups[:base])
@@ -228,7 +287,18 @@ function viz_3d!(
         lines!(ax, line_groups[:highlight], color = highlight_color, linewidth = 0.6)
     end
     if !isempty(line_groups[:neighbor])
-        lines!(ax, line_groups[:neighbor], color = neighbor_color, linewidth = 0.6)
+        if use_neighbor_colormap
+            lines!(
+                ax,
+                line_groups[:neighbor];
+                color = line_colors_neighbor,
+                colormap = neighbor_colormap,
+                colorrange = nbr_cr,
+                linewidth = 0.6,
+            )
+        else
+            lines!(ax, line_groups[:neighbor], color = neighbor_color, linewidth = 0.6)
+        end
     end
     if !isempty(line_groups[:edge])
         lines!(ax, line_groups[:edge], color = edge_color, linewidth = 0.6)
@@ -242,7 +312,19 @@ function viz_3d!(
             scatter!(ax, point_groups[:highlight], color = highlight_color, markersize = 3)
         end
         if !isempty(point_groups[:neighbor])
-            scatter!(ax, point_groups[:neighbor], color = neighbor_color, markersize = 3)
+            if use_neighbor_colormap
+                p = scatter!(
+                    ax,
+                    point_groups[:neighbor];
+                    color = point_colors_neighbor,
+                    colormap = neighbor_colormap,
+                    colorrange = nbr_cr,
+                    markersize = 3,
+                )
+                neighbor_plot === nothing && (neighbor_plot = p)
+            else
+                scatter!(ax, point_groups[:neighbor], color = neighbor_color, markersize = 3)
+            end
         end
         if !isempty(point_groups[:edge])
             scatter!(ax, point_groups[:edge], color = edge_color, markersize = 3)
@@ -252,6 +334,8 @@ function viz_3d!(
     if show_normals && !isempty(normal_segments)
         linesegments!(ax, normal_segments, color = :black, linewidth = 0.4)
     end
+
+    return neighbor_plot
 end
 
 function viz_3d(
@@ -270,11 +354,14 @@ function viz_3d(
     fill_highlight::Bool = true,
     fill_neighbors::Bool = true,
     fill_alpha = 0.3,
+    neighbor_colormap = :viridis,
+    neighbor_colorrange::Union{Nothing, Tuple} = nothing,
+    add_neighbor_colorbar::Bool = false,
     size = (700, 600),
 ) where {P <: AbstractPanel, T}
     fig = Figure(size = size)
     ax = Axis3(fig[1, 1], aspect = :data)
-    viz_3d!(
+    nbr_plot = viz_3d!(
         ax,
         interface;
         show_normals = show_normals,
@@ -291,7 +378,12 @@ function viz_3d(
         fill_highlight = fill_highlight,
         fill_neighbors = fill_neighbors,
         fill_alpha = fill_alpha,
+        neighbor_colormap = neighbor_colormap,
+        neighbor_colorrange = neighbor_colorrange,
     )
+    if add_neighbor_colorbar && nbr_plot !== nothing
+        Colorbar(fig[1, 2], nbr_plot, label = "neighbor order")
+    end
     return fig
 end
 
@@ -311,12 +403,16 @@ function viz_3d(
     fill_highlight::Bool = true,
     fill_neighbors::Bool = true,
     fill_alpha = 0.6,
+    neighbor_colormap = :viridis,
+    neighbor_colorrange::Union{Nothing, Tuple} = nothing,
+    add_neighbor_colorbar::Bool = false,
     size = (700, 600),
 ) where {P <: AbstractPanel, T}
     fig = Figure(size = size)
     ax = Axis3(fig[1, 1], aspect = :data)
+    nbr_plot = nothing
     for interface in interfaces
-        viz_3d!(
+        p = viz_3d!(
             ax,
             interface;
             show_normals = show_normals,
@@ -333,7 +429,13 @@ function viz_3d(
             fill_highlight = fill_highlight,
             fill_neighbors = fill_neighbors,
             fill_alpha = fill_alpha,
+            neighbor_colormap = neighbor_colormap,
+            neighbor_colorrange = neighbor_colorrange,
         )
+        nbr_plot === nothing && (nbr_plot = p)
+    end
+    if add_neighbor_colorbar && nbr_plot !== nothing
+        Colorbar(fig[1, 2], nbr_plot, label = "neighbor order")
     end
     return fig
 end
@@ -483,6 +585,8 @@ function viz_3d(;
     fill_highlight::Bool = true,
     fill_neighbors::Bool = true,
     fill_alpha = 0.3,
+    neighbor_colormap = :viridis,
+    neighbor_colorrange::Union{Nothing, Tuple} = nothing,
     colorrange = nothing,
     min_density = zero(Float64),
     markersize::Real = 6,
@@ -516,6 +620,8 @@ function viz_3d(;
                 fill_highlight = fill_highlight,
                 fill_neighbors = fill_neighbors,
                 fill_alpha = fill_alpha,
+                neighbor_colormap = neighbor_colormap,
+                neighbor_colorrange = neighbor_colorrange,
             )
         end
     end
