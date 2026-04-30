@@ -48,8 +48,8 @@ fig = viz_3d(
     size = (800, 800),
 )
 ax = fig.content[1]
-ax.azimuth = -π/2
-ax.elevation = π/2
+ax.azimuth = -π/2 + deg2rad(15)
+ax.elevation = deg2rad(60)
 
 out = joinpath(@__DIR__, "highlight_neighbors_demo.png")
 save(out, fig)
