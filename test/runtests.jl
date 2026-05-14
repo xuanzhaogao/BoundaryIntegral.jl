@@ -25,6 +25,10 @@ using Test
     include("kernel/laplace3d_near_smoke.jl")
     include("kernel/laplace2d_near_singular.jl")
 
+    # corner singularity and singular panel creation (lightweight)
+    include("utils/corner_singularity.jl")
+    include("shape/box2d_singular.jl")
+
     # shape functions
     if run_full
         include("kernel/laplace3d_near.jl")

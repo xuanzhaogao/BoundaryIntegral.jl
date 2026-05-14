@@ -17,7 +17,7 @@ function line_panel2d_discretize(a::NTuple{2, T}, b::NTuple{2, T}, ns::Vector{T}
     weights = ws .* L ./ 2
 
     @assert norm(normal) ≈ 1 "Normal is not a unit vector"
-    @assert dot(normal, b .- a) < 1e-10 "Normal is not perpendicular to the line segment"
+    @assert abs(dot(normal, b .- a)) < 1e-10 "Normal is not perpendicular to the line segment"
 
     return FlatPanel(normal, [a, b], is_edge, length(ns), ns, ws, points, weights)
 end
@@ -33,7 +33,7 @@ function line_panel2d_singular_discretize(a::NTuple{2, T}, b::NTuple{2, T}, n_qu
     weights = gj_ws .* L ./ 2
 
     @assert norm(normal) ≈ 1 "Normal is not a unit vector"
-    @assert dot(normal, b .- a) < 1e-10 "Normal is not perpendicular to the line segment"
+    @assert abs(dot(normal, b .- a)) < 1e-10 "Normal is not perpendicular to the line segment"
 
     bary_ws = gj_barycentric_weights(gj_xs)
     return FlatPanel{T,2}(normal, [a, b], is_edge, true, exponent, n_quad, gj_xs, gj_ws, points, weights, bary_ws)
@@ -133,6 +133,8 @@ rect = (x, y, w, h) -> [(x, y), (x + w, y), (x + w, y + h), (x, y + h)]
 # vertices in the same box are arranged counter-clockwise, for example: [(0,0), (1,0), (1,1), (0,1)]
 # id of the box is the index of the box in the vector, id of vacuum is 0
 # norm vector points from box with higher id to box with lower id
+# NOTE: singular (Gauss-Jacobi) panels at corners are not yet supported for multi-box geometries.
+# Use corner_singularity_power_multi for the multi-junction singularity power when adding this.
 function multi_dielectric_box2d(n_quad::Int, l_panel::T, l_corner::T, vec_boxes::Vector{Vector{NTuple{2, T}}}, epses::Vector{T}) where T
     ns, ws = gausslegendre(n_quad)
     ns = T.(ns)

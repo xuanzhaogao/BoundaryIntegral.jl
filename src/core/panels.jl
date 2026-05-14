@@ -31,7 +31,7 @@ end
 
 # Constructor with singular panel fields
 function FlatPanel(normal::NTuple{D,T}, corners, is_edge, is_singular, singular_exponent, n_quad, gl_xs, gl_ws, points, weights) where {T, D}
-    bary_weights = gl_barycentric_weights(gl_xs, gl_ws)
+    bary_weights = is_singular ? gj_barycentric_weights(gl_xs) : gl_barycentric_weights(gl_xs, gl_ws)
     return FlatPanel{T,D}(normal, corners, is_edge, is_singular, singular_exponent, n_quad, gl_xs, gl_ws, points, weights, bary_weights)
 end
 

@@ -94,6 +94,9 @@ function laplace2d_near_singular_block(
     # ------------------------------------------------------------------
     # A_direct: direct kernel sum (same as FMM would compute)
     # ------------------------------------------------------------------
+    # For the self-panel case, the diagonal of A_direct is zero (matching FMM/direct sum
+    # which skip i==j).  The corresponding A_near diagonal entries should also be near-zero
+    # for flat panels because the PV integral of d/dn G across a flat panel vanishes by symmetry.
     is_self = (panel_src === panel_trg)
     A_direct = zeros(T, n_trg, n_src)
     for k in 1:n_trg

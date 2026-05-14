@@ -62,4 +62,10 @@ using Test
     # because GJ quadrature naturally resolves the corner density singularity.
     @test errors_singular[end] < errors_regular[end]
     println("Singular error ($(errors_singular[end])) < Regular error ($(errors_regular[end])) at n_quad=$(n_quads[end]): PASS")
+
+    # Singular errors should decrease monotonically with increasing quadrature order
+    for i in 1:length(n_quads) - 1
+        @test errors_singular[i + 1] < errors_singular[i]
+    end
+    println("Singular errors decrease monotonically: PASS")
 end

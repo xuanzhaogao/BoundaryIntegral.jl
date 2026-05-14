@@ -34,4 +34,3 @@ end
     @test gamma_3 > 0.0
 end
 
-println("All corner_singularity tests passed.")
