@@ -28,6 +28,7 @@ using Test
     if run_full
         include("kernel/laplace3d_near.jl")
         include("kernel/laplace3d_near_adaptive.jl")
+        include("kernel/laplace3d_near_source_cache.jl")
         include("shape/box3d.jl")
     end
 
