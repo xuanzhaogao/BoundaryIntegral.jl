@@ -3,7 +3,7 @@ import BoundaryIntegral as BI
 using FastGaussQuadrature, LinearAlgebra
 using Test
 
-# Pin the flatten convention used by `_laplace3d_panel_upsampled_inplace!`:
+# Pin the flatten convention used by `_laplace3d_corrections`:
 # Dw[i, j], output K_up[ti, idx] with idx = (ii - 1) * n_quad + jj (outer ii).
 # A SourceCache built from the same panel must reproduce the same K_up matrix
 # bit-for-bit at the BLAS-3 level (modulo floating-point summation order).
