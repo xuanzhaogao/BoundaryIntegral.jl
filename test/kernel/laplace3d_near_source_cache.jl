@@ -120,3 +120,38 @@ end
     @test norm(K_ref) > 1e-2
     @test isapprox(K_new, K_ref; rtol = 1e-12, atol = 1e-14)
 end
+
+@testset "build_source_cache shapes and reuse" begin
+    ns0, ws0 = gausslegendre(4); ns0 = Float64.(ns0); ws0 = Float64.(ws0)
+    a = (-0.5, -0.5, 0.0); b = ( 0.5, -0.5, 0.0)
+    c = ( 0.5,  0.5, 0.0); d = (-0.5,  0.5, 0.0)
+    normal = (0.0, 0.0, 1.0)
+    panel = BI.rect_panel3d_discretize(a, b, c, d, ns0, ws0, normal)
+
+    n_up = 10
+    cache = BI.build_source_cache(panel, n_up)
+    @test cache.panel === panel
+    @test cache.n_up == n_up
+    @test length(cache.p_up) == n_up^2
+    @test size(cache.Mt) == (panel.n_quad^2, n_up^2)
+
+    # Equivalence to current laplace3d_panel_upsampled output, sample target:
+    a2 = (-0.6, -0.6, 0.4); b2 = ( 0.6, -0.6, 0.4)
+    c2 = ( 0.6,  0.6, 0.4); d2 = (-0.6,  0.6, 0.4)
+    panel_trg = BI.rect_panel3d_discretize(a2, b2, c2, d2, ns0, ws0, normal)
+
+    K_old = BI.laplace3d_DT_panel_upsampled(panel, panel_trg, n_up)
+    # New path: for each target, build kvec and apply Mt.
+    K_new = similar(K_old)
+    np_trg = size(K_new, 1)
+    kvec = Vector{Float64}(undef, n_up^2)
+    for t in 1:np_trg
+        pt = panel_trg.points[t]
+        for α in 1:n_up^2
+            kvec[α] = BI.laplace3d_grad(cache.p_up[α], pt, panel_trg.normal)
+        end
+        K_new[t, :] .= cache.Mt * kvec
+    end
+
+    @test isapprox(K_new, K_old; rtol = 1e-12, atol = 1e-14)
+end

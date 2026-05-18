@@ -1,3 +1,54 @@
+struct SourceCache{T}
+    panel::FlatPanel{T,3}
+    n_up::Int
+    p_up::Vector{NTuple{3,T}}    # length n_up^2, upsampled physical positions
+    Mt::Matrix{T}                # n_quad^2 × n_up^2 moments-to-nodal tensor
+end
+
+function build_source_cache(panel::FlatPanel{T,3}, n_up::Int) where T
+    ns_up_d, ws_up_d = gausslegendre(n_up)
+    ns_up = convert(Vector{T}, ns_up_d)
+    ws_up = convert(Vector{T}, ws_up_d)
+
+    # Per-source Ex from THIS panel's GL nodes (handles varquad).
+    Ex = convert(Matrix{T}, interp_matrix_1d_gl(panel.gl_xs, panel.gl_ws, ns_up))
+
+    a, b, c, d = panel.corners
+    cc = (a .+ b .+ c .+ d) ./ 4
+    Lx = norm(b .- a)
+    Ly = norm(d .- a)
+    scale = Lx * Ly / 4
+    bma = b .- a
+    dma = d .- a
+
+    p_up = Vector{NTuple{3,T}}(undef, n_up^2)
+    for i_up in 1:n_up
+        x = ns_up[i_up] / 2
+        for j_up in 1:n_up
+            y = ns_up[j_up] / 2
+            α = (i_up - 1) * n_up + j_up
+            p_up[α] = cc .+ bma .* x .+ dma .* y
+        end
+    end
+
+    n_quad = panel.n_quad
+    Mt = Matrix{T}(undef, n_quad^2, n_up^2)
+    for m_x in 1:n_quad
+        for m_y in 1:n_quad
+            m = (m_x - 1) * n_quad + m_y
+            for i_up in 1:n_up
+                for j_up in 1:n_up
+                    α = (i_up - 1) * n_up + j_up
+                    Mt[m, α] = scale * ws_up[i_up] * ws_up[j_up] *
+                               Ex[i_up, m_x] * Ex[j_up, m_y]
+                end
+            end
+        end
+    end
+
+    return SourceCache{T}(panel, n_up, p_up, Mt)
+end
+
 function laplace3d_panel_upsampled(panel_src::FlatPanel{T, 3}, panel_trg::FlatPanel{T, 3}, n_up::Int, mode::Symbol) where T
     ns_up, ws_up = gausslegendre(n_up)
     ns_up = T.(ns_up)
