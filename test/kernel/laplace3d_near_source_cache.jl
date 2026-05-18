@@ -7,6 +7,9 @@ using Test
 # Dw[i, j], output K_up[ti, idx] with idx = (ii - 1) * n_quad + jj (outer ii).
 # A SourceCache built from the same panel must reproduce the same K_up matrix
 # bit-for-bit at the BLAS-3 level (modulo floating-point summation order).
+# Note on shapes: `interp_matrix_1d_gl(ns0, ws0, ns_up)` returns an Ex of shape
+# (n_up × n_quad) — query points along the first axis, source nodes along the
+# second. The Mt formula below indexes it accordingly.
 @testset "Mt indexing convention vs transpose(Ex)*Dw*Ex" begin
     n_quad = 4
     n_up   = 8
@@ -60,5 +63,60 @@ using Test
     end
     K_new = Mt * Dwhat_vec
 
+    @test norm(K_ref) > 1e-3   # guard against the test passing on near-zero values
+    @test isapprox(K_new, K_ref; rtol = 1e-12, atol = 1e-14)
+end
+
+# Independent check that the scale * ws_up * ws_up factors in Mt are placed
+# correctly. Pick a plain "kernel" function kvec[α] = f(p_up[α]); compute
+# K_block[m] = Mt * kvec, and compare to the explicit weighted sum
+#   K_block[m] = Σ_{i,j} scale * ws_up[i] * ws_up[j] * kvec[α] * Ex[i,m_x] * Ex[j,m_y].
+# Both formulations must agree; if Mt had wrong weights or scale, this would fail.
+@testset "Mt weights and scale factors" begin
+    n_quad = 3
+    n_up   = 7
+    ns0, ws0 = gausslegendre(n_quad);  ns0 = Float64.(ns0); ws0 = Float64.(ws0)
+    ns_up, ws_up = gausslegendre(n_up); ns_up = Float64.(ns_up); ws_up = Float64.(ws_up)
+    Ex = BI.interp_matrix_1d_gl(ns0, ws0, ns_up)
+
+    a = (-0.7, -0.4, 0.2); b = ( 0.5, -0.4, 0.2)
+    c = ( 0.5,  0.6, 0.2); d = (-0.7,  0.6, 0.2)
+    Lx = norm(b .- a); Ly = norm(d .- a); scale = Lx * Ly / 4
+
+    # Build Mt per spec §5.3.
+    Mt = Matrix{Float64}(undef, n_quad^2, n_up^2)
+    for m_x in 1:n_quad, m_y in 1:n_quad
+        m = (m_x - 1) * n_quad + m_y
+        for i_up in 1:n_up, j_up in 1:n_up
+            α = (i_up - 1) * n_up + j_up
+            Mt[m, α] = scale * ws_up[i_up] * ws_up[j_up] *
+                       Ex[i_up, m_x] * Ex[j_up, m_y]
+        end
+    end
+
+    # Smooth synthetic "kernel" values at upsampled positions (factors do NOT cancel).
+    kvec = Vector{Float64}(undef, n_up^2)
+    for i_up in 1:n_up, j_up in 1:n_up
+        α = (i_up - 1) * n_up + j_up
+        u = ns_up[i_up]; v = ns_up[j_up]
+        kvec[α] = cos(1.7 * u) * sin(0.9 * v) + 0.3
+    end
+
+    K_new = Mt * kvec
+
+    # Explicit weighted-sum reference.
+    K_ref = zeros(Float64, n_quad^2)
+    for m_x in 1:n_quad, m_y in 1:n_quad
+        m = (m_x - 1) * n_quad + m_y
+        s = 0.0
+        for i_up in 1:n_up, j_up in 1:n_up
+            α = (i_up - 1) * n_up + j_up
+            s += scale * ws_up[i_up] * ws_up[j_up] *
+                 kvec[α] * Ex[i_up, m_x] * Ex[j_up, m_y]
+        end
+        K_ref[m] = s
+    end
+
+    @test norm(K_ref) > 1e-2
     @test isapprox(K_new, K_ref; rtol = 1e-12, atol = 1e-14)
 end
