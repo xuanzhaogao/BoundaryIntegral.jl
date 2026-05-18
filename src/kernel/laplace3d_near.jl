@@ -233,8 +233,11 @@ function build_neighbor_list(
     include_edges_trg::Bool;
     distance_only::Bool = false,
     range_factor::T = T(5),
+    correct_edges::Bool = false,
+    adaptive_cfg::AdaptiveConfig = AdaptiveConfig(atol = Float64(atol)),
 ) where {P <: AbstractPanel, T}
-    neighbor_list = Dict{Tuple{Int, Int}, Int}()
+    upsample = Dict{Tuple{Int, Int}, Int}()
+    adaptive = Dict{Tuple{Int, Int}, AdaptiveConfig}()
     n_panels = length(interface.panels)
     centers = Matrix{T}(undef, 3, n_panels)
     lengths = Vector{T}(undef, n_panels)
@@ -265,9 +268,31 @@ function build_neighbor_list(
     tree = KDTree(points)
 
     same_surface_tol = sqrt(eps(T))
+    L_max = maximum(lengths; init = one(T))
+    tol_corner = sqrt(eps(T)) * L_max
+
+    # Phase B (only if correct_edges): KDTree over panel corners.
+    corner_tree = nothing
+    corner_panel_idx = Int[]
+    if correct_edges
+        n_corners = 4 * n_panels
+        corners_mat = Matrix{T}(undef, 3, n_corners)
+        corner_panel_idx = Vector{Int}(undef, n_corners)
+        k = 0
+        for (panel_idx, panel) in enumerate(interface.panels)
+            for ci in 1:4
+                k += 1
+                @views corners_mat[:, k] .= panel.corners[ci]
+                corner_panel_idx[k] = panel_idx
+            end
+        end
+        corner_tree = KDTree(corners_mat)
+    end
 
     for (i, paneli) in enumerate(interface.panels)
-        (!include_edges_src && paneli.is_edge) && continue
+        if !correct_edges
+            (!include_edges_src && paneli.is_edge) && continue
+        end
         l_i = lengths[i]
         n_quad_i = n_quads[i]
         r_i = range_factor * l_i / n_quad_i
@@ -284,9 +309,29 @@ function build_neighbor_list(
             end
         end
 
-        for j in keys(panel_dict)
+        # Phase B: discover corner-touching neighbors not in panel_dict.
+        touching_set = Set{Int}()
+        if correct_edges
+            for ci in 1:4
+                corner_pt = collect(paneli.corners[ci])
+                near_corner_ids = inrange(corner_tree, corner_pt, tol_corner)
+                for cid in near_corner_ids
+                    j = corner_panel_idx[cid]
+                    i == j && continue
+                    push!(touching_set, j)
+                end
+            end
+            for j in touching_set
+                if !haskey(panel_dict, j)
+                    panel_dict[j] = Int[]
+                end
+            end
+        end
 
-            (!include_edges_trg && interface.panels[j].is_edge) && continue
+        for j in keys(panel_dict)
+            if !correct_edges
+                (!include_edges_trg && interface.panels[j].is_edge) && continue
+            end
 
             dot_normals = dot(normals[i], normals[j])
             if dot_normals > 1 - same_surface_tol
@@ -295,11 +340,17 @@ function build_neighbor_list(
                 end
             end
 
+            if correct_edges && (j in touching_set)
+                adaptive[(i, j)] = adaptive_cfg
+                continue
+            end
+
             if distance_only
-                neighbor_list[(i, j)] = n_quad_i
+                upsample[(i, j)] = n_quad_i
             else
                 # find the closest point in panel j to panel i
                 points_j = panel_dict[j]
+                isempty(points_j) && continue
                 min_dist = Inf
                 min_point_id = 0
                 for point_id in points_j
@@ -314,17 +365,17 @@ function build_neighbor_list(
 
                 if order_i > n_quad_i
                     key = (i, j)
-                    if haskey(neighbor_list, key)
-                        neighbor_list[key] = max(neighbor_list[key], order_i)
+                    if haskey(upsample, key)
+                        upsample[key] = max(upsample[key], order_i)
                     else
-                        neighbor_list[key] = order_i
+                        upsample[key] = order_i
                     end
                 end
             end
         end
     end
 
-    return neighbor_list
+    return (; upsample, adaptive)
 end
 
 # linear operator for the corrected DT kernel
@@ -339,9 +390,9 @@ function laplace3d_DT_fmm3d_corrected(
 ) where {P <: AbstractPanel}
     n_points = num_points(interface)
     D_base = laplace3d_DT_fmm3d(interface, fmm_tol)
-    neighbor_list = build_neighbor_list(interface, max_order, up_tol, include_edges_src, include_edges_trg, range_factor = range_factor)
-    @info "length of neighbor_list: $(length(keys(neighbor_list))) out of $(length(interface.panels)^2)"
-    corrections = laplace3d_DT_corrections(interface, neighbor_list)
+    (; upsample, adaptive) = build_neighbor_list(interface, max_order, up_tol, include_edges_src, include_edges_trg, range_factor = range_factor)
+    @info "neighbor list: upsample=$(length(upsample)) adaptive=$(length(adaptive)) of $(length(interface.panels)^2)"
+    corrections = laplace3d_DT_corrections(interface, upsample, adaptive)
 
     f = charges -> (D_base * charges) + (corrections * charges)
     return LinearMap{Float64}(f, n_points, n_points)
@@ -357,9 +408,9 @@ function laplace3d_D_fmm3d_corrected(
 ) where {P <: AbstractPanel}
     n_points = num_points(interface)
     D_base = laplace3d_D_fmm3d(interface, fmm_tol)
-    neighbor_list = build_neighbor_list(interface, max_order, up_tol, include_edges_src, include_edges_trg)
-    @info "length of neighbor_list: $(length(keys(neighbor_list))) out of $(length(interface.panels)^2)"
-    corrections = laplace3d_D_corrections(interface, neighbor_list)
+    (; upsample, adaptive) = build_neighbor_list(interface, max_order, up_tol, include_edges_src, include_edges_trg)
+    @info "neighbor list: upsample=$(length(upsample)) adaptive=$(length(adaptive)) of $(length(interface.panels)^2)"
+    corrections = laplace3d_D_corrections(interface, upsample, adaptive)
 
     f = charges -> (D_base * charges) + (corrections * charges)
     return LinearMap{Float64}(f, n_points, n_points)

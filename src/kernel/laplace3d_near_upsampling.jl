@@ -126,19 +126,29 @@ end
 # the un-corrected per-pair direct evaluation.
 function _laplace3d_corrections(
     interface::DielectricInterface{P, T},
-    neighbor_list::Dict{Tuple{Int, Int}, Int},
+    upsample_dict::Dict{Tuple{Int, Int}, Int},
+    adaptive_dict::Dict{Tuple{Int, Int}, AdaptiveConfig},
     mode::Symbol, direct_kernel::Function,
 ) where {P <: AbstractPanel, T}
     cnt = [length(p.points) for p in interface.panels]
     offsets = cumsum(vcat(0, cnt))
     total_n = offsets[end]
 
-    # Group neighbors by source panel index.
-    src_to_neighbors = Dict{Int, Vector{Tuple{Int, Int}}}()   # i => [(j, n_up), ...]
-    for ((i, j), n_up) in neighbor_list
-        push!(get!(() -> Vector{Tuple{Int,Int}}(), src_to_neighbors, i), (j, n_up))
+    # Sanity: dicts must be disjoint.
+    for k in keys(adaptive_dict)
+        @assert !haskey(upsample_dict, k) "neighbor key $k present in both dicts"
     end
-    source_indices = collect(keys(src_to_neighbors))
+
+    # Group neighbors by source panel.
+    src_to_ups = Dict{Int, Vector{Tuple{Int, Int}}}()
+    for ((i, j), n_up) in upsample_dict
+        push!(get!(() -> Vector{Tuple{Int,Int}}(), src_to_ups, i), (j, n_up))
+    end
+    src_to_adp = Dict{Int, Vector{Tuple{Int, AdaptiveConfig}}}()
+    for ((i, j), cfg) in adaptive_dict
+        push!(get!(() -> Vector{Tuple{Int, AdaptiveConfig}}(), src_to_adp, i), (j, cfg))
+    end
+    source_indices = collect(union(keys(src_to_ups), keys(src_to_adp)))
 
     nthreads = Base.Threads.maxthreadid()
     rows_tl = [Int[] for _ in 1:nthreads]
@@ -148,62 +158,66 @@ function _laplace3d_corrections(
     Base.Threads.@threads :dynamic for k in 1:length(source_indices)
         i = source_indices[k]
         panel_src = interface.panels[i]
-        neighbors = src_to_neighbors[i]
-        n_up_max = maximum(nup for (_, nup) in neighbors)
+        col_off = offsets[i]
+        ncols = offsets[i + 1] - col_off
 
-        cache = build_source_cache(panel_src, n_up_max)   # one per source panel
+        # Build SourceCache only if upsample neighbors exist.
+        cache = if haskey(src_to_ups, i)
+            n_up_max = maximum(nup for (_, nup) in src_to_ups[i])
+            build_source_cache(panel_src, n_up_max)
+        else
+            nothing
+        end
 
         tid = Base.Threads.threadid()
         rows = rows_tl[tid]
         cols = cols_tl[tid]
         vals = vals_tl[tid]
-        col_off = offsets[i]
-        ncols = offsets[i + 1] - col_off
 
-        # The per-pair n_up is intentionally ignored: each source panel uses
-        # n_up_max across all its neighbors so the SourceCache is built once.
-        for (j, _n_up) in neighbors
-            panel_trg = interface.panels[j]
-            np_trg = num_points(panel_trg)
-
-            # Build Kmat[alpha, t] over all targets in panel j (BLAS-3 friendly).
-            n_up_eff = cache.n_up                # we use the panel's full n_up_max cache
-            Kmat = Matrix{T}(undef, n_up_eff^2, np_trg)
-            if mode === :DT
-                for t in 1:np_trg
-                    pt = panel_trg.points[t]
-                    for alpha in 1:(n_up_eff^2)
-                        Kmat[alpha, t] = laplace3d_grad(cache.p_up[alpha], pt, panel_trg.normal)
+        if haskey(src_to_ups, i)
+            # The per-pair n_up is intentionally ignored: each source panel uses
+            # n_up_max across all its neighbors so the SourceCache is built once.
+            for (j, _n_up) in src_to_ups[i]
+                panel_trg = interface.panels[j]
+                np_trg = num_points(panel_trg)
+                n_up_eff = cache.n_up
+                Kmat = Matrix{T}(undef, n_up_eff^2, np_trg)
+                if mode === :DT
+                    for t in 1:np_trg
+                        pt = panel_trg.points[t]
+                        for α in 1:(n_up_eff^2)
+                            Kmat[α, t] = laplace3d_grad(cache.p_up[α], pt, panel_trg.normal)
+                        end
                     end
-                end
-            elseif mode === :D
-                for t in 1:np_trg
-                    pt = panel_trg.points[t]
-                    for alpha in 1:(n_up_eff^2)
-                        Kmat[alpha, t] = laplace3d_grad(pt, cache.p_up[alpha], panel_src.normal)
+                elseif mode === :D
+                    for t in 1:np_trg
+                        pt = panel_trg.points[t]
+                        for α in 1:(n_up_eff^2)
+                            Kmat[α, t] = laplace3d_grad(pt, cache.p_up[α], panel_src.normal)
+                        end
                     end
+                else
+                    error("unknown mode for _laplace3d_corrections")
                 end
-            else
-                error("unknown mode for _laplace3d_corrections")
-            end
-
-            K_block_T = cache.Mt * Kmat            # (n_quad^2, np_trg)
-            K_block = transpose(K_block_T)         # (np_trg, n_quad^2)
-
-            K_direct = direct_kernel(panel_src, panel_trg)
-
-            row_off = offsets[j]
-            nrows = offsets[j + 1] - row_off
-            @inbounds for c_local in 1:ncols
-                for r_local in 1:nrows
-                    v = K_block[r_local, c_local] - K_direct[r_local, c_local]
-                    iszero(v) && continue
-                    push!(rows, row_off + r_local)
-                    push!(cols, col_off + c_local)
-                    push!(vals, v)
+                K_block_T = cache.Mt * Kmat
+                K_block = transpose(K_block_T)
+                K_direct = direct_kernel(panel_src, panel_trg)
+                row_off = offsets[j]
+                nrows = offsets[j + 1] - row_off
+                @inbounds for c_local in 1:ncols
+                    for r_local in 1:nrows
+                        v = K_block[r_local, c_local] - K_direct[r_local, c_local]
+                        iszero(v) && continue
+                        push!(rows, row_off + r_local)
+                        push!(cols, col_off + c_local)
+                        push!(vals, v)
+                    end
                 end
             end
         end
+
+        # Adaptive branch is wired in Task 9; for now it must be empty.
+        @assert !haskey(src_to_adp, i) "adaptive neighbors present but adaptive path not yet implemented (Task 9)"
     end
 
     return sparse(reduce(vcat, rows_tl), reduce(vcat, cols_tl),
@@ -211,11 +225,13 @@ function _laplace3d_corrections(
 end
 
 function laplace3d_DT_corrections(interface::DielectricInterface{P, T},
-                                  neighbor_list::Dict{Tuple{Int, Int}, Int}) where {P <: AbstractPanel, T}
-    return _laplace3d_corrections(interface, neighbor_list, :DT, laplace3d_DT_panel)
+                                  upsample_dict::Dict{Tuple{Int, Int}, Int},
+                                  adaptive_dict::Dict{Tuple{Int, Int}, AdaptiveConfig}) where {P <: AbstractPanel, T}
+    return _laplace3d_corrections(interface, upsample_dict, adaptive_dict, :DT, laplace3d_DT_panel)
 end
 
 function laplace3d_D_corrections(interface::DielectricInterface{P, T},
-                                 neighbor_list::Dict{Tuple{Int, Int}, Int}) where {P <: AbstractPanel, T}
-    return _laplace3d_corrections(interface, neighbor_list, :D, laplace3d_D_panel)
+                                 upsample_dict::Dict{Tuple{Int, Int}, Int},
+                                 adaptive_dict::Dict{Tuple{Int, Int}, AdaptiveConfig}) where {P <: AbstractPanel, T}
+    return _laplace3d_corrections(interface, upsample_dict, adaptive_dict, :D, laplace3d_D_panel)
 end

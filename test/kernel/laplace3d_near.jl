@@ -180,10 +180,10 @@ end
 
     @test order_12 > p1.n_quad
     @test order_21 > p2.n_quad
-    @test neighbors[(1, 2)] == order_12
-    @test neighbors[(2, 1)] == order_21
-    @test !haskey(neighbors, (3, 4))
-    @test !haskey(neighbors, (4, 3))
+    @test neighbors.upsample[(1, 2)] == order_12
+    @test neighbors.upsample[(2, 1)] == order_21
+    @test !haskey(neighbors.upsample, (3, 4))
+    @test !haskey(neighbors.upsample, (4, 3))
 end
 
 @testset "build_neighbor_list edge filter" begin
@@ -218,11 +218,11 @@ end
     atol = 1e-3
 
     neighbors_all = BI.build_neighbor_list(interface, max_order, atol, true, true)
-    @test haskey(neighbors_all, (1, 2))
-    @test haskey(neighbors_all, (2, 1))
+    @test haskey(neighbors_all.upsample, (1, 2))
+    @test haskey(neighbors_all.upsample, (2, 1))
 
     neighbors_skip = BI.build_neighbor_list(interface, max_order, atol, false, false)
-    @test isempty(neighbors_skip)
+    @test isempty(neighbors_skip.upsample) && isempty(neighbors_skip.adaptive)
 end
 
 @testset "build_neighbor_list same surface skip" begin
@@ -252,7 +252,7 @@ end
 
     interface = BI.DielectricInterface([p1, p2], fill(2.0, 2), fill(1.0, 2))
     neighbors = BI.build_neighbor_list(interface, 12, 1e-3, true, true)
-    @test isempty(neighbors)
+    @test isempty(neighbors.upsample) && isempty(neighbors.adaptive)
 end
 
 @testset "build_neighbor_list varquad interface" begin
@@ -273,8 +273,8 @@ end
     )
 
     neighbors = BI.build_neighbor_list(interface, 1, 1e-6, true, true; distance_only = true, range_factor = 10.0)
-    @test !isempty(neighbors)
-    for ((i, _), n_up) in neighbors
+    @test !isempty(neighbors.upsample)
+    for ((i, _), n_up) in neighbors.upsample
         @test n_up == interface.panels[i].n_quad
     end
 end
@@ -324,7 +324,7 @@ end
 
     interface = BI.DielectricInterface([p1, p2, p3, p4], fill(2.0, 4), fill(1.0, 4))
     neighbors = BI.build_neighbor_list(interface, 12, 1e-3, true, true)
-    corrections = BI.laplace3d_DT_corrections(interface, neighbors)
+    corrections = BI.laplace3d_DT_corrections(interface, neighbors.upsample, neighbors.adaptive)
 
     cnt = [length(p1.points), length(p2.points), length(p3.points), length(p4.points)]
     offsets = cumsum(vcat(0, cnt))
@@ -337,8 +337,8 @@ end
 
     expected = zeros(Float64, total_n)
 
-    n12 = neighbors[(1, 2)]
-    n21 = neighbors[(2, 1)]
+    n12 = neighbors.upsample[(1, 2)]
+    n21 = neighbors.upsample[(2, 1)]
 
     block_12 = BI.laplace3d_DT_panel_upsampled(p1, p2, n12) - BI.laplace3d_DT_panel(p1, p2)
     block_21 = BI.laplace3d_DT_panel_upsampled(p2, p1, n21) - BI.laplace3d_DT_panel(p2, p1)
@@ -437,7 +437,7 @@ end
     max_order = 12
     corrected = BI.laplace3d_DT_fmm3d_corrected(interface, tol, tol, max_order)
     neighbors = BI.build_neighbor_list(interface, max_order, tol, true, true)
-    corrections = BI.laplace3d_DT_corrections(interface, neighbors)
+    corrections = BI.laplace3d_DT_corrections(interface, neighbors.upsample, neighbors.adaptive)
     base = BI.laplace3d_DT_fmm3d(interface, tol)
 
     n = BI.num_points(interface)
@@ -542,7 +542,7 @@ end
     interface = BI.DielectricInterface([p1, p2], fill(2.0, 2), fill(1.0, 2))
     atol = 1e-8
     neighbors = BI.build_neighbor_list(interface, 1, atol, true, true; distance_only = true, range_factor = 5.0)
-    corrections = BI.laplace3d_DT_corrections_hcubature(interface, neighbors, atol)
+    corrections = BI.laplace3d_DT_corrections_hcubature(interface, neighbors.upsample, atol)
 
     sigma(p) = p[1] + 2 * p[2] - p[3]
 
@@ -552,7 +552,7 @@ end
     end
 
     expected = corrections * rho
-    got = BI.laplace3d_DT_corrections_hcubature_apply(interface, neighbors, atol, sigma)
+    got = BI.laplace3d_DT_corrections_hcubature_apply(interface, neighbors.upsample, atol, sigma)
 
     @test norm(got - expected, Inf) < 1e-8
 end
@@ -606,7 +606,7 @@ end
     max_order = 12
     corrected = BI.laplace3d_D_fmm3d_corrected(interface, tol, tol, max_order)
     neighbors = BI.build_neighbor_list(interface, max_order, tol, true, true)
-    corrections = BI.laplace3d_D_corrections(interface, neighbors)
+    corrections = BI.laplace3d_D_corrections(interface, neighbors.upsample, neighbors.adaptive)
     base = BI.laplace3d_D_fmm3d(interface, tol)
 
     n = BI.num_points(interface)
