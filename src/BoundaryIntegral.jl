@@ -67,6 +67,7 @@ include("kernel/laplace2d.jl")
 include("kernel/laplace3d.jl")
 include("kernel/laplace3d_near.jl")
 include("kernel/laplace3d_near_upsampling.jl")
+include("kernel/laplace3d_near_adaptive.jl")
 include("kernel/laplace3d_near_hcubature.jl")
 
 # # geometries

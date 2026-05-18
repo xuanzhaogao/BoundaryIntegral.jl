@@ -27,6 +27,7 @@ using Test
     # shape functions
     if run_full
         include("kernel/laplace3d_near.jl")
+        include("kernel/laplace3d_near_adaptive.jl")
         include("shape/box3d.jl")
     end
 
