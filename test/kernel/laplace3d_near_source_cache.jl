@@ -155,3 +155,44 @@ end
 
     @test isapprox(K_new, K_old; rtol = 1e-12, atol = 1e-14)
 end
+
+@testset "SourceCache handles varquad (per-panel gl_xs)" begin
+    # Two panels with different n_quad: the old global cache used panels[1].gl_xs
+    # for both, which gave wrong Mt for panels[2]. Per-source Ex must fix this.
+    n1 = 4; n2 = 6
+    ns1, ws1 = gausslegendre(n1); ns1 = Float64.(ns1); ws1 = Float64.(ws1)
+    ns2, ws2 = gausslegendre(n2); ns2 = Float64.(ns2); ws2 = Float64.(ws2)
+    normal = (0.0, 0.0, 1.0)
+
+    panel1 = BI.rect_panel3d_discretize(
+        (-0.5, -0.5, 0.0), (0.5, -0.5, 0.0),
+        (0.5, 0.5, 0.0), (-0.5, 0.5, 0.0),
+        ns1, ws1, normal)
+    panel2 = BI.rect_panel3d_discretize(
+        (1.0, -0.5, 0.0), (2.0, -0.5, 0.0),
+        (2.0, 0.5, 0.0), (1.0, 0.5, 0.0),
+        ns2, ws2, normal)
+
+    n_up = 12
+
+    # Build per-panel caches and compare each to laplace3d_DT_panel_upsampled
+    panel_trg = BI.rect_panel3d_discretize(
+        (-0.5, -0.5, 0.5), (0.5, -0.5, 0.5),
+        (0.5, 0.5, 0.5), (-0.5, 0.5, 0.5),
+        ns1, ws1, normal)
+
+    for panel in (panel1, panel2)
+        cache = BI.build_source_cache(panel, n_up)
+        K_ref = BI.laplace3d_DT_panel_upsampled(panel, panel_trg, n_up)
+        K_new = similar(K_ref)
+        kvec = Vector{Float64}(undef, n_up^2)
+        for t in 1:size(K_new, 1)
+            pt = panel_trg.points[t]
+            for α in 1:n_up^2
+                kvec[α] = BI.laplace3d_grad(cache.p_up[α], pt, panel_trg.normal)
+            end
+            K_new[t, :] .= cache.Mt * kvec
+        end
+        @test isapprox(K_new, K_ref; rtol = 1e-12, atol = 1e-14)
+    end
+end
