@@ -10,6 +10,8 @@ using Test
     @test cfg.max_depth == 20
 
     cfg2 = BI.AdaptiveConfig(atol = 1e-6, rtol = 1e-10, n_GL = 8, max_depth = 12)
+    @test cfg2.atol == 1e-6
+    @test cfg2.rtol == 1e-10
     @test cfg2.n_GL == 8
     @test cfg2.max_depth == 12
 end
