@@ -233,6 +233,38 @@ end
     @test BI.rhs_dielectric_box3d(interface, vs_small) ≈ BI.rhs_dielectric_box3d(interface, vs_sharp, 1.0)
 end
 
+@testset "dielectric_box3d corrected edges flag" begin
+    eps_box = 4.0
+    interface = BI.single_dielectric_box3d(3.0, 3.0, 1.0, 6, 0.2, eps_box, 1.0, Float64; alpha = sqrt(2))
+    rhs = BI.rhs_dielectric_box3d(interface, BI.PointSource((0.1, 0.1, 0.1), 1.0), eps_box)
+    ws = BI.all_weights(interface)
+
+    lhs_off = BI.lhs_dielectric_box3d_fmm3d_corrected(interface, 1e-6, 1e-6, 12;
+                                                     correct_edges = false)
+    lhs_on  = BI.lhs_dielectric_box3d_fmm3d_corrected(interface, 1e-6, 1e-6, 12;
+                                                     correct_edges = true,
+                                                     adaptive_atol = 1e-6)
+
+    x_off = BI.solve_gmres(lhs_off, rhs, 1e-6, 1e-6)
+    x_on  = BI.solve_gmres(lhs_on,  rhs, 1e-6, 1e-6)
+
+    flux_off = dot(ws, x_off)
+    flux_on  = dot(ws, x_on)
+
+    err_off = abs(flux_off + 1.0 / eps_box - 1.0)
+    err_on  = abs(flux_on  + 1.0 / eps_box - 1.0)
+    @info "dielectric box flux error: off=$(err_off) on=$(err_on)"
+
+    # Both should converge GMRES.
+    @test norm(lhs_off * x_off - rhs) < 1e-5
+    @test norm(lhs_on  * x_on  - rhs) < 1e-5
+    # The corrected (correct_edges=true) flux error should not be worse than
+    # the uncorrected baseline. We do not assert a hard improvement: the
+    # baseline already passes the existing 1e-1 acceptance, so on small
+    # geometries the gain can be modest.
+    @test err_on <= err_off + 1e-6
+end
+
 @testset "dielectric_box3d volume backend wiring" begin
     root = pkgdir(BoundaryIntegral)
     entrypoint = read(joinpath(root, "src", "BoundaryIntegral.jl"), String)
