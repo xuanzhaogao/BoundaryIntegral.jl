@@ -216,8 +216,44 @@ function _laplace3d_corrections(
             end
         end
 
-        # Adaptive branch is wired in Task 9; for now it must be empty.
-        @assert !haskey(src_to_adp, i) "adaptive neighbors present but adaptive path not yet implemented (Task 9)"
+        if haskey(src_to_adp, i)
+            n_quad_i = panel_src.n_quad
+            Krow = Vector{T}(undef, n_quad_i^2)
+            warn_pairs = Set{Tuple{Int,Int}}()
+            for (j, cfg) in src_to_adp[i]
+                panel_trg = interface.panels[j]
+                np_trg = num_points(panel_trg)
+                K_block = Matrix{T}(undef, np_trg, n_quad_i^2)
+                for t in 1:np_trg
+                    fill!(Krow, zero(T))
+                    hit = adaptive_panel_moments_inplace!(
+                        Krow, panel_src, panel_trg.points[t], panel_trg.normal,
+                        mode, cfg,
+                    )
+                    if hit
+                        push!(warn_pairs, (i, j))
+                    end
+                    @inbounds for c_local in 1:length(Krow)
+                        K_block[t, c_local] = Krow[c_local]
+                    end
+                end
+                K_direct = direct_kernel(panel_src, panel_trg)
+                row_off = offsets[j]
+                nrows = offsets[j + 1] - row_off
+                @inbounds for c_local in 1:ncols
+                    for r_local in 1:nrows
+                        v = K_block[r_local, c_local] - K_direct[r_local, c_local]
+                        iszero(v) && continue
+                        push!(rows, row_off + r_local)
+                        push!(cols, col_off + c_local)
+                        push!(vals, v)
+                    end
+                end
+            end
+            if !isempty(warn_pairs)
+                @warn "adaptive_panel_moments hit max_depth for pairs: $(collect(warn_pairs))"
+            end
+        end
     end
 
     return sparse(reduce(vcat, rows_tl), reduce(vcat, cols_tl),
