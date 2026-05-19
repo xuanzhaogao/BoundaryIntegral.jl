@@ -271,12 +271,10 @@ function laplace3d_DT_fmm3d_corrected_hcubature(
     fmm_tol::Float64,
     hcubature_atol::Float64,
     range_factor::Float64;
-    include_edges_src::Bool = false,
-    include_edges_trg::Bool = false,
 ) where {P <: AbstractPanel}
     n_points = num_points(interface)
     D_base = laplace3d_DT_fmm3d(interface, fmm_tol)
-    (; upsample, adaptive) = build_neighbor_list(interface, 1, hcubature_atol, include_edges_src, include_edges_trg, distance_only = true, range_factor = range_factor)
+    (; upsample, adaptive) = build_neighbor_list(interface, 1, hcubature_atol; distance_only = true, range_factor = range_factor)
     @info "neighbor list: upsample=$(length(upsample)) adaptive=$(length(adaptive)) of $(length(interface.panels)^2)"
     corrections = laplace3d_DT_corrections_hcubature(interface, upsample, hcubature_atol)
 
@@ -290,7 +288,6 @@ function laplace3d_pottrg_fmm3d_corrected_hcubature(
     fmm_tol::Float64,
     hcubature_atol::Float64,
     range_factor::Float64;
-    include_edges_src::Bool = false,
 ) where {P <: AbstractPanel}
     @assert size(targets, 1) == 3
 
@@ -309,7 +306,7 @@ function laplace3d_pottrg_fmm3d_corrected_hcubature(
     end
 
     pot_base = laplace3d_pottrg_fmm3d(refined_interface, targets, fmm_tol)
-    target_neighbor_list = build_target_neighbor_list(refined_interface, targets, include_edges_src; range_factor = range_factor)
+    target_neighbor_list = build_target_neighbor_list(refined_interface, targets, false; range_factor = range_factor)
 
     @info "num of sources: $(num_points(interface)) → $(num_points(refined_interface))"
     if !isempty(target_neighbor_list)

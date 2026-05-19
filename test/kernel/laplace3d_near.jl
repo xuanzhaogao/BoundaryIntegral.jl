@@ -156,7 +156,7 @@ end
 
     max_order = 12
     atol = 1e-3
-    neighbors = BI.build_neighbor_list(interface, max_order, atol, true, true)
+    neighbors = BI.build_neighbor_list(interface, max_order, atol; correct_edges = true)
 
     center_p2 = (p2.corners[1] .+ p2.corners[2] .+ p2.corners[3] .+ p2.corners[4]) ./ 4
     center_p1 = (p1.corners[1] .+ p1.corners[2] .+ p1.corners[3] .+ p1.corners[4]) ./ 4
@@ -186,7 +186,7 @@ end
     @test !haskey(neighbors.upsample, (4, 3))
 end
 
-@testset "build_neighbor_list edge filter" begin
+@testset "build_neighbor_list correct_edges flag" begin
     ns, ws = gausslegendre(2)
     ns = Float64.(ns)
     ws = Float64.(ws)
@@ -217,12 +217,20 @@ end
     max_order = 12
     atol = 1e-3
 
-    neighbors_all = BI.build_neighbor_list(interface, max_order, atol, true, true)
-    @test haskey(neighbors_all.upsample, (1, 2))
-    @test haskey(neighbors_all.upsample, (2, 1))
+    # correct_edges = false (default): edge panels are skipped entirely
+    neighbors_off = BI.build_neighbor_list(interface, max_order, atol)
+    @test isempty(neighbors_off.upsample) && isempty(neighbors_off.adaptive)
 
-    neighbors_skip = BI.build_neighbor_list(interface, max_order, atol, false, false)
-    @test isempty(neighbors_skip.upsample) && isempty(neighbors_skip.adaptive)
+    # correct_edges = true: all panels participate; at least one edge panel appears
+    neighbors_on = BI.build_neighbor_list(interface, max_order, atol; correct_edges = true)
+    edge_panel_ids = Set{Int}()
+    for (i, j) in keys(neighbors_on.upsample)
+        push!(edge_panel_ids, i); push!(edge_panel_ids, j)
+    end
+    for (i, j) in keys(neighbors_on.adaptive)
+        push!(edge_panel_ids, i); push!(edge_panel_ids, j)
+    end
+    @test !isempty(edge_panel_ids)
 end
 
 @testset "build_neighbor_list same surface skip" begin
@@ -251,7 +259,7 @@ end
     )
 
     interface = BI.DielectricInterface([p1, p2], fill(2.0, 2), fill(1.0, 2))
-    neighbors = BI.build_neighbor_list(interface, 12, 1e-3, true, true)
+    neighbors = BI.build_neighbor_list(interface, 12, 1e-3; correct_edges = true)
     @test isempty(neighbors.upsample) && isempty(neighbors.adaptive)
 end
 
@@ -272,7 +280,7 @@ end
         n_quad_min = 2,
     )
 
-    neighbors = BI.build_neighbor_list(interface, 1, 1e-6, true, true; distance_only = true, range_factor = 10.0)
+    neighbors = BI.build_neighbor_list(interface, 1, 1e-6; distance_only = true, range_factor = 10.0, correct_edges = true)
     @test !isempty(neighbors.upsample)
     for ((i, _), n_up) in neighbors.upsample
         @test n_up == interface.panels[i].n_quad
@@ -323,7 +331,7 @@ end
     )
 
     interface = BI.DielectricInterface([p1, p2, p3, p4], fill(2.0, 4), fill(1.0, 4))
-    neighbors = BI.build_neighbor_list(interface, 12, 1e-3, true, true)
+    neighbors = BI.build_neighbor_list(interface, 12, 1e-3; correct_edges = true)
     corrections = BI.laplace3d_DT_corrections(interface, neighbors.upsample, neighbors.adaptive)
 
     cnt = [length(p1.points), length(p2.points), length(p3.points), length(p4.points)]
@@ -436,7 +444,7 @@ end
     tol = 1e-12
     max_order = 12
     corrected = BI.laplace3d_DT_fmm3d_corrected(interface, tol, tol, max_order)
-    neighbors = BI.build_neighbor_list(interface, max_order, tol, true, true)
+    neighbors = BI.build_neighbor_list(interface, max_order, tol; correct_edges = true)
     corrections = BI.laplace3d_DT_corrections(interface, neighbors.upsample, neighbors.adaptive)
     base = BI.laplace3d_DT_fmm3d(interface, tol)
 
@@ -541,7 +549,7 @@ end
 
     interface = BI.DielectricInterface([p1, p2], fill(2.0, 2), fill(1.0, 2))
     atol = 1e-8
-    neighbors = BI.build_neighbor_list(interface, 1, atol, true, true; distance_only = true, range_factor = 5.0)
+    neighbors = BI.build_neighbor_list(interface, 1, atol; distance_only = true, range_factor = 5.0, correct_edges = true)
     corrections = BI.laplace3d_DT_corrections_hcubature(interface, neighbors.upsample, atol)
 
     sigma(p) = p[1] + 2 * p[2] - p[3]
@@ -605,7 +613,7 @@ end
     tol = 1e-12
     max_order = 12
     corrected = BI.laplace3d_D_fmm3d_corrected(interface, tol, tol, max_order)
-    neighbors = BI.build_neighbor_list(interface, max_order, tol, true, true)
+    neighbors = BI.build_neighbor_list(interface, max_order, tol; correct_edges = true)
     corrections = BI.laplace3d_D_corrections(interface, neighbors.upsample, neighbors.adaptive)
     base = BI.laplace3d_D_fmm3d(interface, tol)
 

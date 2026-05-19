@@ -27,14 +27,14 @@ using Test
     # With correct_edges = false: classic discovery; range_factor is small
     # enough that the two interior-node clouds do not see each other.
     (; upsample, adaptive) =
-        BI.build_neighbor_list(interface, 1, 1e-6, true, true;
+        BI.build_neighbor_list(interface, 1, 1e-6;
                                distance_only = true, range_factor = 0.5,
                                correct_edges = false)
     @test isempty(adaptive)
 
     # With correct_edges = true: the corner KDTree must surface the touching pair.
     (; upsample, adaptive) =
-        BI.build_neighbor_list(interface, 1, 1e-6, true, true;
+        BI.build_neighbor_list(interface, 1, 1e-6;
                                distance_only = true, range_factor = 0.5,
                                correct_edges = true)
     @test haskey(adaptive, (1, 2)) || haskey(adaptive, (2, 1))

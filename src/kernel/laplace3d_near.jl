@@ -228,9 +228,7 @@ end
 function build_neighbor_list(
     interface::DielectricInterface{P, T},
     max_order::Int,
-    atol::T,
-    include_edges_src::Bool,
-    include_edges_trg::Bool;
+    atol::T;
     distance_only::Bool = false,
     range_factor::T = T(5),
     correct_edges::Bool = false,
@@ -290,9 +288,7 @@ function build_neighbor_list(
     end
 
     for (i, paneli) in enumerate(interface.panels)
-        if !correct_edges
-            (!include_edges_src && paneli.is_edge) && continue
-        end
+        (!correct_edges && paneli.is_edge) && continue
         l_i = lengths[i]
         n_quad_i = n_quads[i]
         r_i = range_factor * l_i / n_quad_i
@@ -329,9 +325,7 @@ function build_neighbor_list(
         end
 
         for j in keys(panel_dict)
-            if !correct_edges
-                (!include_edges_trg && interface.panels[j].is_edge) && continue
-            end
+            (!correct_edges && interface.panels[j].is_edge) && continue
 
             dot_normals = dot(normals[i], normals[j])
             if dot_normals > 1 - same_surface_tol
@@ -384,8 +378,6 @@ function laplace3d_DT_fmm3d_corrected(
     fmm_tol::Float64,
     up_tol::Float64,
     max_order::Int;
-    include_edges_src::Bool = false,
-    include_edges_trg::Bool = false,
     range_factor::Float64 = 5.0,
     correct_edges::Bool = false,
     adaptive_atol::Float64 = up_tol,
@@ -397,7 +389,7 @@ function laplace3d_DT_fmm3d_corrected(
     D_base = laplace3d_DT_fmm3d(interface, fmm_tol)
     adaptive_cfg = AdaptiveConfig(adaptive_atol, adaptive_rtol, adaptive_n_GL, adaptive_max_depth)
     (; upsample, adaptive) = build_neighbor_list(
-        interface, max_order, up_tol, include_edges_src, include_edges_trg;
+        interface, max_order, up_tol;
         range_factor = range_factor,
         correct_edges = correct_edges,
         adaptive_cfg = adaptive_cfg,
@@ -414,8 +406,6 @@ function laplace3d_D_fmm3d_corrected(
     fmm_tol::Float64,
     up_tol::Float64,
     max_order::Int;
-    include_edges_src::Bool = false,
-    include_edges_trg::Bool = false,
     range_factor::Float64 = 5.0,
     correct_edges::Bool = false,
     adaptive_atol::Float64 = up_tol,
@@ -427,7 +417,7 @@ function laplace3d_D_fmm3d_corrected(
     D_base = laplace3d_D_fmm3d(interface, fmm_tol)
     adaptive_cfg = AdaptiveConfig(adaptive_atol, adaptive_rtol, adaptive_n_GL, adaptive_max_depth)
     (; upsample, adaptive) = build_neighbor_list(
-        interface, max_order, up_tol, include_edges_src, include_edges_trg;
+        interface, max_order, up_tol;
         range_factor = range_factor,
         correct_edges = correct_edges,
         adaptive_cfg = adaptive_cfg,

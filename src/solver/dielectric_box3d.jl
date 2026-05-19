@@ -50,8 +50,6 @@ function lhs_dielectric_box3d_fmm3d_corrected(
     fmm_tol::Float64,
     up_tol::Float64,
     max_order::Int;
-    include_edges_src::Bool = true,
-    include_edges_trg::Bool = true,
     correct_edges::Bool = false,
     adaptive_atol::Float64 = up_tol,
     adaptive_rtol::Float64 = sqrt(eps(Float64)),
@@ -64,8 +62,6 @@ function lhs_dielectric_box3d_fmm3d_corrected(
         fmm_tol,
         up_tol,
         max_order;
-        include_edges_src = include_edges_src,
-        include_edges_trg = include_edges_trg,
         correct_edges = correct_edges,
         adaptive_atol = adaptive_atol,
         adaptive_rtol = adaptive_rtol,
