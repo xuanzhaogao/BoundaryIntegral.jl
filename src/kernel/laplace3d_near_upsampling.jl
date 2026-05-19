@@ -218,25 +218,34 @@ function _laplace3d_corrections(
 
         if haskey(src_to_adp, i)
             n_quad_i = panel_src.n_quad
-            Krow = Vector{T}(undef, n_quad_i^2)
             warn_pairs = Set{Tuple{Int,Int}}()
             for (j, cfg) in src_to_adp[i]
                 panel_trg = interface.panels[j]
                 np_trg = num_points(panel_trg)
-                K_block = Matrix{T}(undef, np_trg, n_quad_i^2)
-                for t in 1:np_trg
-                    fill!(Krow, zero(T))
-                    hit = adaptive_panel_moments_inplace!(
-                        Krow, panel_src, panel_trg.points[t], panel_trg.normal,
-                        mode, cfg,
-                    )
-                    if hit
-                        push!(warn_pairs, (i, j))
-                    end
-                    @inbounds for c_local in 1:length(Krow)
-                        K_block[t, c_local] = Krow[c_local]
-                    end
+
+                # Pick a representative target: the GL node on panel_trg closest
+                # to the first corner of panel_src. This drives the tree topology
+                # once, shared across all targets of this pair.
+                c1_src = panel_src.corners[1]
+                rep_idx = argmin(norm(panel_trg.points[t] .- c1_src) for t in 1:np_trg)
+
+                # Walk the tree once (representative target) to get the leaf cell list.
+                leaves, hit_max = walk_adaptive_tree(
+                    panel_src, panel_trg.points[rep_idx], panel_trg.normal,
+                    mode, cfg,
+                )
+                if hit_max
+                    push!(warn_pairs, (i, j))
                 end
+
+                # Evaluate the kernel for all targets simultaneously using the cached
+                # leaf topology — tight inner loops, position computed once per GL point.
+                K_block = zeros(T, np_trg, n_quad_i^2)
+                adaptive_block_moments_inplace!(
+                    K_block, panel_src, panel_trg.points, panel_trg.normal,
+                    leaves, mode, cfg,
+                )
+
                 K_direct = direct_kernel(panel_src, panel_trg)
                 row_off = offsets[j]
                 nrows = offsets[j + 1] - row_off
