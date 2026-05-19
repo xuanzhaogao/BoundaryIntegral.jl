@@ -266,12 +266,14 @@ end
 @testset "dielectric_box3d volume backend wiring" begin
     root = pkgdir(BoundaryIntegral)
     entrypoint = read(joinpath(root, "src", "BoundaryIntegral.jl"), String)
-    box3d = read(joinpath(root, "src", "shape", "box3d.jl"), String)
+    shape_dir = joinpath(root, "src", "shape")
+    shape_sources = join([read(joinpath(shape_dir, f), String)
+                          for f in readdir(shape_dir) if endswith(f, ".jl")], "\n")
 
     @test occursin("using TKM3D", entrypoint)
     @test !occursin("using FBCPoisson", entrypoint)
-    @test occursin("ltkm3dc", box3d)
-    @test !occursin("lfbc3d", box3d)
+    @test occursin("ltkm3dc", shape_sources)
+    @test !occursin("lfbc3d", shape_sources)
 end
 
 @testset "dielectric_box3d correct_edges improves edge-near pointwise potential" begin

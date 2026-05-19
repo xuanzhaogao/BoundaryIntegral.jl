@@ -1,6 +1,7 @@
 using BoundaryIntegral
 using Random
 using StaticArrays
+using SpecialFunctions: erf
 using Test
 
 @testset "VolumeSource grid" begin
