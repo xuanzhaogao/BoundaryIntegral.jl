@@ -217,8 +217,8 @@ end
     max_order = 12
     atol = 1e-3
 
-    # correct_edges = false (default): edge panels are skipped entirely
-    neighbors_off = BI.build_neighbor_list(interface, max_order, atol)
+    # correct_edges = false: edge panels are skipped entirely
+    neighbors_off = BI.build_neighbor_list(interface, max_order, atol; correct_edges = false)
     @test isempty(neighbors_off.upsample) && isempty(neighbors_off.adaptive)
 
     # correct_edges = true: all panels participate; at least one edge panel appears

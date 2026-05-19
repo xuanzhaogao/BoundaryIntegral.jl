@@ -273,3 +273,48 @@ end
     @test occursin("ltkm3dc", box3d)
     @test !occursin("lfbc3d", box3d)
 end
+
+@testset "dielectric_box3d correct_edges improves edge-near pointwise potential" begin
+    eps_box = 4.0
+    Lx, Ly, Lz = 3.0, 3.0, 1.0
+    source = BI.PointSource((0.1, 0.1, 0.1), 1.0)
+    near_corner = (1.40, 1.40, 0.40)   # close to the +x/+y/+z corner of the box
+
+    # Direct Coulomb potential of the point source (free space inside the box).
+    function source_pot(target, src::BI.PointSource)
+        r = sqrt((target[1]-src.point[1])^2 + (target[2]-src.point[2])^2 + (target[3]-src.point[3])^2)
+        return src.charge / (4π * r)
+    end
+
+    function pot_at(interface, σ, target)
+        induced = BI.laplace3d_pottrg_near(interface, target, σ, 1e-8; range_factor = 5.0)
+        return source_pot(target, source) / eps_box + induced
+    end
+
+    function solve_at(l_ec, correct_edges_flag)
+        interface = BI.single_dielectric_box3d(Lx, Ly, Lz, 6, l_ec, eps_box, 1.0, Float64; alpha = sqrt(2))
+        lhs = BI.lhs_dielectric_box3d_fmm3d_corrected(interface, 1e-6, 1e-6, 12;
+                                                     correct_edges = correct_edges_flag,
+                                                     adaptive_atol = 1e-8)
+        rhs = BI.rhs_dielectric_box3d(interface, source, eps_box)
+        σ = BI.solve_gmres(lhs, rhs, 1e-7, 1e-7)
+        return pot_at(interface, σ, near_corner)
+    end
+
+    # Reference at fine resolution with correction enabled.
+    pot_ref = solve_at(0.06, true)
+
+    # Coarse-mesh comparison.
+    pot_off = solve_at(0.10, false)
+    pot_on  = solve_at(0.10, true)
+
+    err_off = abs(pot_off - pot_ref)
+    err_on  = abs(pot_on  - pot_ref)
+    @info "near-corner pointwise error" err_off err_on
+
+    # The corrected version must be meaningfully better near the corner.
+    # Empirical baseline at l_ec=0.10: err_off ≈ 1.3e-4, err_on ≈ 3.7e-5 (3.5× better).
+    # We require at least 2× improvement to allow some headroom.
+    @test err_on < err_off / 2
+    @test err_on < 1e-4     # absolute bound
+end
