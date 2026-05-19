@@ -29,6 +29,7 @@ using Test
         include("kernel/laplace3d_near.jl")
         include("kernel/laplace3d_near_adaptive.jl")
         include("kernel/laplace3d_near_source_cache.jl")
+        include("kernel/laplace3d_near_corner_pairs.jl")
         include("shape/box3d.jl")
     end
 
