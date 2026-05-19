@@ -52,6 +52,11 @@ function lhs_dielectric_box3d_fmm3d_corrected(
     max_order::Int;
     include_edges_src::Bool = true,
     include_edges_trg::Bool = true,
+    correct_edges::Bool = false,
+    adaptive_atol::Float64 = up_tol,
+    adaptive_rtol::Float64 = sqrt(eps(Float64)),
+    adaptive_n_GL::Int = 0,
+    adaptive_max_depth::Int = 20,
 ) where {P <: AbstractPanel}
     n_points = num_points(interface)
     D_transpose = laplace3d_DT_fmm3d_corrected(
@@ -61,6 +66,11 @@ function lhs_dielectric_box3d_fmm3d_corrected(
         max_order;
         include_edges_src = include_edges_src,
         include_edges_trg = include_edges_trg,
+        correct_edges = correct_edges,
+        adaptive_atol = adaptive_atol,
+        adaptive_rtol = adaptive_rtol,
+        adaptive_n_GL = adaptive_n_GL,
+        adaptive_max_depth = adaptive_max_depth,
     )
 
     function apply_operator(charges::AbstractVector{Float64})

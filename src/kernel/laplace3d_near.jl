@@ -387,10 +387,21 @@ function laplace3d_DT_fmm3d_corrected(
     include_edges_src::Bool = false,
     include_edges_trg::Bool = false,
     range_factor::Float64 = 5.0,
+    correct_edges::Bool = false,
+    adaptive_atol::Float64 = up_tol,
+    adaptive_rtol::Float64 = sqrt(eps(Float64)),
+    adaptive_n_GL::Int = 0,
+    adaptive_max_depth::Int = 20,
 ) where {P <: AbstractPanel}
     n_points = num_points(interface)
     D_base = laplace3d_DT_fmm3d(interface, fmm_tol)
-    (; upsample, adaptive) = build_neighbor_list(interface, max_order, up_tol, include_edges_src, include_edges_trg, range_factor = range_factor)
+    adaptive_cfg = AdaptiveConfig(adaptive_atol, adaptive_rtol, adaptive_n_GL, adaptive_max_depth)
+    (; upsample, adaptive) = build_neighbor_list(
+        interface, max_order, up_tol, include_edges_src, include_edges_trg;
+        range_factor = range_factor,
+        correct_edges = correct_edges,
+        adaptive_cfg = adaptive_cfg,
+    )
     @info "neighbor list: upsample=$(length(upsample)) adaptive=$(length(adaptive)) of $(length(interface.panels)^2)"
     corrections = laplace3d_DT_corrections(interface, upsample, adaptive)
 
@@ -405,10 +416,22 @@ function laplace3d_D_fmm3d_corrected(
     max_order::Int;
     include_edges_src::Bool = false,
     include_edges_trg::Bool = false,
+    range_factor::Float64 = 5.0,
+    correct_edges::Bool = false,
+    adaptive_atol::Float64 = up_tol,
+    adaptive_rtol::Float64 = sqrt(eps(Float64)),
+    adaptive_n_GL::Int = 0,
+    adaptive_max_depth::Int = 20,
 ) where {P <: AbstractPanel}
     n_points = num_points(interface)
     D_base = laplace3d_D_fmm3d(interface, fmm_tol)
-    (; upsample, adaptive) = build_neighbor_list(interface, max_order, up_tol, include_edges_src, include_edges_trg)
+    adaptive_cfg = AdaptiveConfig(adaptive_atol, adaptive_rtol, adaptive_n_GL, adaptive_max_depth)
+    (; upsample, adaptive) = build_neighbor_list(
+        interface, max_order, up_tol, include_edges_src, include_edges_trg;
+        range_factor = range_factor,
+        correct_edges = correct_edges,
+        adaptive_cfg = adaptive_cfg,
+    )
     @info "neighbor list: upsample=$(length(upsample)) adaptive=$(length(adaptive)) of $(length(interface.panels)^2)"
     corrections = laplace3d_D_corrections(interface, upsample, adaptive)
 
