@@ -40,6 +40,7 @@ using Test
 
     # multi-rhs solver
     include("solver/multi_rhs.jl")
+    include("solver/multi_rhs_vector.jl")
 
     # solver functions
     if run_full

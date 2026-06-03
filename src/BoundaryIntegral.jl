@@ -54,11 +54,12 @@ export solve_lu, solve_gmres
 
 # system input
 export read_system_input, SystemInput, OrbitalEntry
+export density_centroid
 
 # multi-rhs solver
-export pair_density_source, RHSGroup, assemble_rhs_group, build_group_interface
+export pair_density_source, RHSGroup, assemble_rhs_group, num_pairs, build_group_interface
 export batched_lhs_dielectric_box3d_fmm3d_corrected, BatchedDielectricOperator
-export solve_dielectric_box3d_group
+export solve_dielectric_box3d_group, solve_dielectric_box3d_block
 
 # visualization
 export viz_2d, viz_3d

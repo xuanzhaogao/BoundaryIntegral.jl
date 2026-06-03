@@ -275,6 +275,87 @@ function _block_gmres_solve(op::BatchedDielectricOperator, F::AbstractMatrix;
     return Σ, stats
 end
 
+# true iff every source is sampled on identical grid points (=> one FMM tree can serve all)
+function _sources_share_positions(vss::AbstractVector)
+    length(vss) <= 1 && return true
+    p1 = vss[1].positions
+    for k in 2:length(vss)
+        (size(vss[k].positions) == size(p1) && vss[k].positions == p1) || return false
+    end
+    return true
+end
+
+"""
+    rhs_dielectric_box3d_fmm3d(interface, vss::Vector{VolumeSource}, thresh) -> N×K matrix
+
+Multi-source right-hand side: column k is the BIE RHS for source `vss[k]`, mirroring the
+single-source `rhs_dielectric_box3d_fmm3d(interface, vs, thresh)` (each source screened via
+the interface, `eps_src = 1`). When all (screened) sources share identical grid points, a
+single `nd = K` batched FMM is used; otherwise the per-source method is looped.
+"""
+function rhs_dielectric_box3d_fmm3d(
+    interface::DielectricInterface{P, Float64},
+    vss::Vector{<:VolumeSource{Float64, 3}},
+    thresh::Float64,
+) where {P <: FlatPanel{Float64, 3}}
+    n_points = num_points(interface)
+    K = length(vss)
+    K == 0 && return zeros(Float64, n_points, 0)
+    screened = [screened_volume_source(interface, vs, SharpScreening()) for vs in vss]
+
+    if !_sources_share_positions(screened)
+        F = Matrix{Float64}(undef, n_points, K)
+        for k in 1:K
+            F[:, k] = rhs_dielectric_box3d_fmm3d(interface, screened[k], 1.0, thresh)
+        end
+        return F
+    end
+
+    # shared grid -> one nd=K batched FMM (matches the per-source formula exactly)
+    sources = screened[1].positions
+    n = size(sources, 2)
+    charges = Matrix{Float64}(undef, K, n)
+    @inbounds for k in 1:K, s in 1:n
+        charges[k, s] = screened[k].weights[s] * screened[k].density[s]
+    end
+    targets = zeros(Float64, 3, n_points)
+    normals = zeros(Float64, 3, n_points)
+    for (i, point) in enumerate(eachpoint(interface))
+        targets[1, i] = point.panel_point.point[1]
+        targets[2, i] = point.panel_point.point[2]
+        targets[3, i] = point.panel_point.point[3]
+        normals[1, i] = point.panel_point.normal[1]
+        normals[2, i] = point.panel_point.normal[2]
+        normals[3, i] = point.panel_point.normal[3]
+    end
+    vals = lfmm3d(thresh, sources, charges = charges, targets = targets, pgt = 2, nd = K)
+    grad = reshape(vals.gradtarg, K, 3, n_points)
+    F = Matrix{Float64}(undef, n_points, K)
+    @inbounds for k in 1:K, i in 1:n_points
+        F[i, k] = (normals[1, i] * grad[k, 1, i] +
+                   normals[2, i] * grad[k, 2, i] +
+                   normals[3, i] * grad[k, 3, i]) / (4π)
+    end
+    return F
+end
+
+"""
+    solve_dielectric_box3d_block(interface, vss::Vector{VolumeSource}; kw...) -> (Σ, stats)
+
+Low-level multi-RHS solve on a prebuilt shared interface: builds the batched operator and the
+N×K RHS, then block-GMRES solves A Σ = F for the layer densities Σ (N×K).
+"""
+function solve_dielectric_box3d_block(
+    interface::DielectricInterface{P, Float64},
+    vss::Vector{<:VolumeSource{Float64, 3}};
+    fmm_tol::Float64 = 1e-9, up_tol::Float64 = 1e-9, max_order::Int = 8,
+    rtol::Float64 = 1e-10, atol::Float64 = 0.0, itmax::Int = 500,
+) where {P <: FlatPanel{Float64, 3}}
+    op = batched_lhs_dielectric_box3d_fmm3d_corrected(interface, fmm_tol, up_tol, max_order)
+    F = rhs_dielectric_box3d_fmm3d(interface, vss, fmm_tol)
+    return Krylov.block_gmres(op, F; rtol = rtol, atol = atol, itmax = itmax)
+end
+
 """
     solve_dielectric_box3d_group(bie_path, center_id; kw...) -> (; sigma, interface, group, stats)
 
