@@ -52,6 +52,9 @@ export Rhs_dielectric_box3d, Rhs_dielectric_box3d_fmm3d, Rhs_dielectric_box3d_hy
 # linear algebra
 export solve_lu, solve_gmres
 
+# system input
+export read_system_input, SystemInput, OrbitalEntry
+
 # visualization
 export viz_2d, viz_3d
 export viz_3d_surface
@@ -87,6 +90,7 @@ include("utils/quad_order.jl")
 include("utils/best_grid.jl")
 include("utils/gaussians.jl")
 include("utils/xsf_reader.jl")
+include("utils/system_input.jl")
 
 # # solvers
 include("solver/dielectric_box2d.jl")

@@ -11,6 +11,7 @@ using Test
     include("utils/barycentric.jl")
     include("utils/quad_order.jl")
     include("utils/best_grid.jl")
+    include("utils/system_input.jl")
 
     # visualization helpers
     include("visualization/extensions.jl")
