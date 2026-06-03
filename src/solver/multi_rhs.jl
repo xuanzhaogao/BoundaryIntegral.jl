@@ -90,10 +90,13 @@ end
 
 Assemble one center's batch of pair densities `rho_{i,j}` (j in the resolved group) on phi_i's
 grid, as an `RHSGroup`. Each orbital's datagrid is read at most once (cached in `grid_cache`,
-which may be shared across calls). The group is then truncated to its **union support**: points
-where the envelope `sqrt(sum_k rho_k^2)` is below `support_rtol * max` are dropped, with the
-SAME index set applied to every column so all densities stay on shared grid points (required
-for nd-batched FMM). Pass `support_rtol = 0` to keep the full grid.
+which may be shared across calls). The group is then truncated to its **union support**: a point
+is kept if it is significant for ANY source RELATIVE TO THAT SOURCE'S OWN max
+(`|rho_k(p)| >= support_rtol * max_p|rho_k|`). The per-source-relative test (rather than a single
+global threshold) keeps the support of small off-site densities `rho_{i,j+R}`, which can be
+orders of magnitude smaller than the on-site density. The same kept-index set is applied to every
+column so all densities stay on shared grid points (required for nd-batched FMM). Pass
+`support_rtol = 0` to keep the full grid.
 """
 function assemble_rhs_group(si::SystemInput, center_id::Int;
         support_rtol::Real = 1e-6, grid_cache::AbstractDict = Dict{String, Any}())
@@ -113,11 +116,21 @@ function assemble_rhs_group(si::SystemInput, center_id::Int;
         densities[:, k] .= _flatten_grid_array(dg_i, _pair_density_array(dg_i, dg_j))
     end
 
-    # union-support truncation: keep points where the group envelope is non-negligible
+    # union-support truncation: keep a point if it is significant for ANY source relative to
+    # that source's OWN max (so small off-site densities keep their support, not just the
+    # largest on-site one).
     keep = if support_rtol > 0
-        env = vec(sqrt.(sum(abs2, densities; dims = 2)))
-        m = maximum(env)
-        m > 0 ? findall(>=(support_rtol * m), env) : collect(1:n)
+        mask = falses(n)
+        @inbounds for k in 1:K
+            col = @view densities[:, k]
+            mk = maximum(abs, col)
+            mk == 0 && continue
+            thr = support_rtol * mk
+            for p in 1:n
+                abs(col[p]) >= thr && (mask[p] = true)
+            end
+        end
+        findall(mask)
     else
         collect(1:n)
     end
