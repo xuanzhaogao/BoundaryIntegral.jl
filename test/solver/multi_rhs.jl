@@ -40,4 +40,19 @@ using Test
         @test interface isa DielectricInterface
         @test length(interface.panels) >= 6        # at least the 6 box faces
     end
+
+    @testset "batched RHS == single-RHS (K=1 regression)" begin
+        fixdir = joinpath(@__DIR__, "..", "fixtures")
+        si = read_system_input(joinpath(fixdir, "system_small.bie"))
+        g = assemble_rhs_group(si, 1)
+        interface = build_group_interface(si, g; n_quad = 6, rhs_atol = 1e-3, l_ec = 0.25)
+
+        F = rhs_dielectric_box3d_fmm3d_batched(interface, si, g, 1e-9)
+        @test size(F) == (BoundaryIntegral.num_points(interface), 1)
+
+        # reference: the existing per-source screened FMM RHS for rho_11
+        vs = VolumeSource(copy(g.positions), copy(g.weights), g.densities[:, 1])
+        f_ref = rhs_dielectric_box3d_fmm3d(interface, vs, 1e-9)   # screened convenience method
+        @test maximum(abs.(F[:, 1] .- f_ref)) < 1e-6
+    end
 end

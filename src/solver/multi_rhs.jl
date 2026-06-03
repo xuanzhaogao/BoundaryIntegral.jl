@@ -107,3 +107,64 @@ function build_group_interface(si::SystemInput, g::RHSGroup;
         n_quad, l_ec, si.boxes, si.epses, env, rhs_atol;
         eps_out = eps_out, max_depth = max_depth)
 end
+
+# Batched RHS for a whole center group on a shared grid.
+# Returns an N x K matrix F whose column k is f_{i, neighbor_ids[k]} = -∂n u_inc[rho_ij].
+# Placed in multi_rhs.jl (not dielectric_box3d.jl) because the signature references
+# SystemInput/RHSGroup, which are defined here / in system_input.jl and are not yet
+# bound at the point dielectric_box3d.jl is included (parse-time resolution).
+function rhs_dielectric_box3d_fmm3d_batched(
+    interface::DielectricInterface{P, Float64},
+    si::SystemInput,
+    group::RHSGroup,
+    thresh::Float64,
+) where {P <: AbstractPanel}
+    n = size(group.positions, 2)
+    K = num_pairs(group)
+    n_points = num_points(interface)
+
+    # per-point screening factor 1/eps_local (identical across columns -> nd-batchable)
+    inv_eps = Vector{Float64}(undef, n)
+    @inbounds for s in 1:n
+        pos = (group.positions[1, s], group.positions[2, s], group.positions[3, s])
+        eps_local = si.eps_out
+        for b in eachindex(si.boxes)
+            box = si.boxes[b]
+            lo = (box.center[1] - box.Lx/2, box.center[2] - box.Ly/2, box.center[3] - box.Lz/2)
+            hi = (box.center[1] + box.Lx/2, box.center[2] + box.Ly/2, box.center[3] + box.Lz/2)
+            if lo[1] <= pos[1] <= hi[1] && lo[2] <= pos[2] <= hi[2] && lo[3] <= pos[3] <= hi[3]
+                eps_local = si.epses[b]; break
+            end
+        end
+        inv_eps[s] = 1.0 / eps_local
+    end
+
+    # charges (nd=K, n) = weight * (1/eps) * density, per column
+    charges = Matrix{Float64}(undef, K, n)
+    @inbounds for k in 1:K, s in 1:n
+        charges[k, s] = group.weights[s] * inv_eps[s] * group.densities[s, k]
+    end
+
+    targets = zeros(Float64, 3, n_points)
+    normals = zeros(Float64, 3, n_points)
+    for (i, point) in enumerate(eachpoint(interface))
+        targets[1, i] = point.panel_point.point[1]
+        targets[2, i] = point.panel_point.point[2]
+        targets[3, i] = point.panel_point.point[3]
+        normals[1, i] = point.panel_point.normal[1]
+        normals[2, i] = point.panel_point.normal[2]
+        normals[3, i] = point.panel_point.normal[3]
+    end
+
+    vals = lfmm3d(thresh, group.positions, charges = charges, targets = targets, pgt = 2)
+    # FMM3D returns gradtarg as (nd, 3, n_points) for nd > 1, but drops the leading
+    # singleton dim to (3, n_points) when nd == 1. Reshape to a uniform (K, 3, n_points).
+    grad = reshape(vals.gradtarg, K, 3, n_points)
+    F = Matrix{Float64}(undef, n_points, K)
+    @inbounds for k in 1:K, i in 1:n_points
+        F[i, k] = (normals[1, i] * grad[k, 1, i] +
+                   normals[2, i] * grad[k, 2, i] +
+                   normals[3, i] * grad[k, 3, i]) / (4π)
+    end
+    return F
+end
