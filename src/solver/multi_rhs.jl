@@ -22,12 +22,12 @@ function pair_density_source(xsf_i::AbstractString, xsf_j::AbstractString; tol::
         return VolumeSource(dg_i, dg_i.values .* dg_j.values; tol = tol)
     end
     # fallback: resample phi_j onto phi_i's grid
-    o, M, Minv, _, _, _ = _datagrid_affine(dg_i)
+    Minv_j = _datagrid_affine(dg_j)[3]          # inverse cell matrix, computed once
     prod = similar(dg_i.values)
     nx, ny, nz = dg_i.nx, dg_i.ny, dg_i.nz
     for ix in 1:nx, iy in 1:ny, iz in 1:nz
         p = grid_point(dg_i, ix, iy, iz)
-        vj = _datagrid_trilinear_value(dg_j, _datagrid_affine(dg_j)[3], p)
+        vj = _datagrid_trilinear_value(dg_j, Minv_j, p)
         prod[ix, iy, iz] = dg_i.values[ix, iy, iz] * (isnan(vj) ? 0.0 : vj)
     end
     return VolumeSource(dg_i, prod; tol = tol)
