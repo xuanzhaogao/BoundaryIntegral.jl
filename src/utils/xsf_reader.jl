@@ -161,6 +161,40 @@ function VolumeSource(datagrid; shift::NTuple{3,<:Real}=(0.0, 0.0, 0.0), tol::Re
     return VolumeSource(axes, weights, density, origin, basis; tol = T(tol))
 end
 
+function datagrids_compatible(a, b; tol = 1e-10)
+    a.nx == b.nx && a.ny == b.ny && a.nz == b.nz || return false
+    maximum(abs.(a.origin .- b.origin)) <= tol &&
+        maximum(abs.(a.A .- b.A)) <= tol &&
+        maximum(abs.(a.B .- b.B)) <= tol &&
+        maximum(abs.(a.C .- b.C)) <= tol
+end
+
+# Build a VolumeSource on `datagrid`'s grid using an externally supplied density array
+# (e.g. a pointwise product of two orbitals).
+function VolumeSource(datagrid, density::AbstractArray{<:Real,3};
+                      shift::NTuple{3,<:Real} = (0.0, 0.0, 0.0), tol::Real = 0.0)
+    nx, ny, nz = datagrid.nx, datagrid.ny, datagrid.nz
+    size(density) == (nx, ny, nz) ||
+        throw(ArgumentError("density size $(size(density)) != grid ($nx,$ny,$nz)"))
+    T = Float64
+    axes = (collect(T((i - 1) / nx) for i in 1:nx),
+            collect(T((j - 1) / ny) for j in 1:ny),
+            collect(T((k - 1) / nz) for k in 1:nz))
+    At, Bt, Ct = true_cell_vectors(datagrid)
+    basis = ((At[1], At[2], At[3]), (Bt[1], Bt[2], Bt[3]), (Ct[1], Ct[2], Ct[3]))
+    # Use raw cell vectors A, B, C for the jacobian so that weights integrate the
+    # periodic cell correctly: jac = |det([A, B, C])|, weight = jac / (nx*ny*nz).
+    A = collect(Tuple(datagrid.A))
+    B = collect(Tuple(datagrid.B))
+    C = collect(Tuple(datagrid.C))
+    jac = abs(det(hcat(A, B, C)))
+    weights = fill(jac / (nx * ny * nz), nx, ny, nz)
+    dens = Array{T,3}(density)
+    shift_f = (Float64(shift[1]), Float64(shift[2]), Float64(shift[3]))
+    origin = (datagrid.origin[1], datagrid.origin[2], datagrid.origin[3]) .+ shift_f
+    return VolumeSource(axes, weights, dens, origin, basis; tol = T(tol))
+end
+
 function _datagrid_affine(datagrid)
     o = datagrid.origin
     At, Bt, Ct = true_cell_vectors(datagrid)

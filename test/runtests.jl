@@ -38,6 +38,9 @@ using Test
     # multi-box 3d
     include("shape/multi_box3d.jl")
 
+    # multi-rhs solver
+    include("solver/multi_rhs.jl")
+
     # solver functions
     if run_full
         include("solver/dielectric_box2d.jl")

@@ -55,6 +55,9 @@ export solve_lu, solve_gmres
 # system input
 export read_system_input, SystemInput, OrbitalEntry
 
+# multi-rhs solver
+export pair_density_source
+
 # visualization
 export viz_2d, viz_3d
 export viz_3d_surface
@@ -95,6 +98,7 @@ include("utils/system_input.jl")
 # # solvers
 include("solver/dielectric_box2d.jl")
 include("solver/dielectric_box3d.jl")
+include("solver/multi_rhs.jl")
 
 # # visualization
 include("visualization/viz_2d.jl")
