@@ -180,6 +180,39 @@ function density_centroid(datagrid)
     return (sx / sw, sy / sw, sz / sw)
 end
 
+"""
+    _lattice_grid_shift(datagrid, primvec, (n1,n2,n3)) -> NTuple{3,Int}
+
+Integer `circshift` amounts for translating a density by `n1·a1 + n2·a2 + n3·a3`, where the
+datagrid spanning vectors (true cell) are integer multiples of the primitive lattice vectors
+`a_d = primvec[d,:]` along each grid axis. Errors if a lattice vector is not commensurate with
+the grid (i.e. grid-steps-per-lattice-vector is not an integer).
+"""
+function _lattice_grid_shift(datagrid, primvec::AbstractMatrix, n::NTuple{3,Int})
+    At, Bt, Ct = true_cell_vectors(datagrid)
+    span = (At, Bt, Ct)
+    dims = (datagrid.nx, datagrid.ny, datagrid.nz)
+    return ntuple(3) do d
+        mult = norm(span[d]) / norm(primvec[d, :])      # supercell multiplicity along grid axis d
+        sd = dims[d] / mult                             # grid steps per primitive lattice vector
+        isapprox(sd, round(sd); rtol = 1e-4) ||
+            error("lattice axis $d not commensurate with grid: $sd steps per a$d")
+        round(Int, sd) * n[d]
+    end
+end
+
+"""
+    lattice_shifted_datagrid(datagrid, primvec, (n1,n2,n3))
+
+Return a copy of `datagrid` with its density translated by the lattice vector
+`n1·a1 + n2·a2 + n3·a3` via an exact integer `circshift` (same grid; periodic).
+"""
+function lattice_shifted_datagrid(datagrid, primvec::AbstractMatrix, n::NTuple{3,Int})
+    n == (0, 0, 0) && return datagrid
+    shift = _lattice_grid_shift(datagrid, primvec, n)
+    return merge(datagrid, (; values = circshift(datagrid.values, shift)))
+end
+
 function datagrids_compatible(a, b; tol = 1e-10)
     a.nx == b.nx && a.ny == b.ny && a.nz == b.nz || return false
     maximum(abs.(a.origin .- b.origin)) <= tol &&

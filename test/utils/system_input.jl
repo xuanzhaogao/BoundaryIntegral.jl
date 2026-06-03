@@ -29,3 +29,14 @@ end
     si = read_system_input(joinpath(fixdir, "system_centroid.bie"))
     @test all(isapprox.(si.orbitals[1].center, (1.0, 1.0, 1.0); atol = 1e-12))
 end
+
+@testset "lattice-shifted orbital image" begin
+    fixdir = joinpath(@__DIR__, "..", "fixtures")
+    # orb_lat: 4x4x4, supercell mult 2 -> 2 grid steps per a1; spike at the (1,1,1) corner.
+    si = read_system_input(joinpath(fixdir, "system_lat.bie"))
+    @test si.orbitals[1].grid_shift == (0, 0, 0)
+    @test si.orbitals[1].center == (0.0, 0.0, 0.0)         # spike at origin
+    @test si.orbitals[2].grid_shift == (2, 0, 0)           # LATTICE 1 0 0 -> 2 grid steps
+    @test all(isapprox.(si.orbitals[2].center, (1.0, 0.0, 0.0); atol = 1e-12))  # shifted by a1
+    @test sort(si.groups[1]) == [1, 2]                     # both within cutoff
+end

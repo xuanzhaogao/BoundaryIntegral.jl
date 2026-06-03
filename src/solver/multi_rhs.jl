@@ -77,6 +77,14 @@ end
 
 num_pairs(g::RHSGroup) = length(g.neighbor_ids)
 
+# Datagrid for one orbital instance: the raw (cached) .xsf grid, circshifted by the orbital's
+# lattice-image shift if any. Same grid (origin/vectors) — so all instances stay grid-compatible.
+function _instance_grid(orb::OrbitalEntry, cache::AbstractDict)
+    raw = _cached_xsf_grid!(cache, orb.xsf_path)
+    orb.grid_shift == (0, 0, 0) && return raw
+    return merge(raw, (; values = circshift(raw.values, orb.grid_shift)))
+end
+
 """
     assemble_rhs_group(si, center_id; support_rtol=1e-6, grid_cache=Dict{String,Any}())
 
@@ -93,15 +101,15 @@ function assemble_rhs_group(si::SystemInput, center_id::Int;
     js = si.groups[center_id]
     isempty(js) && error("group $center_id is empty")
     K = length(js)
-    dg_i = _cached_xsf_grid!(grid_cache, si.orbitals[center_id].xsf_path)
+    dg_i = _instance_grid(si.orbitals[center_id], grid_cache)
 
     # column 1 also gives the shared positions/weights (full grid, canonical ordering)
-    base = VolumeSource(dg_i, _pair_density_array(dg_i, _cached_xsf_grid!(grid_cache, si.orbitals[js[1]].xsf_path)))
+    base = VolumeSource(dg_i, _pair_density_array(dg_i, _instance_grid(si.orbitals[js[1]], grid_cache)))
     n = length(base.density)
     densities = Matrix{Float64}(undef, n, K)
     densities[:, 1] .= base.density
     for k in 2:K
-        dg_j = _cached_xsf_grid!(grid_cache, si.orbitals[js[k]].xsf_path)
+        dg_j = _instance_grid(si.orbitals[js[k]], grid_cache)
         densities[:, k] .= _flatten_grid_array(dg_i, _pair_density_array(dg_i, dg_j))
     end
 

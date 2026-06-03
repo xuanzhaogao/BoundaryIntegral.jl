@@ -5,6 +5,7 @@ struct OrbitalEntry
     id::Int
     xsf_path::String
     center::NTuple{3,Float64}
+    grid_shift::NTuple{3,Int}     # integer circshift (lattice-image translation; (0,0,0) = none)
 end
 
 """
@@ -78,7 +79,7 @@ function read_system_input(path::AbstractString)
     boxes = BoxGeom[]
     epses = Float64[]
     eps_out = 1.0
-    orb_rows = Tuple{Int,String,Union{NTuple{3,Float64},Nothing}}[]
+    orb_rows = Tuple{Int,String,Tuple{Symbol,Any}}[]
     cutoff = Inf
     overrides = Dict{Int,Vector{Int}}()
     solve_dict = Dict{String,String}()
@@ -121,11 +122,18 @@ function read_system_input(path::AbstractString)
                 parts = split(row)
                 id = parse(Int, parts[1])
                 xsf = parts[2]
-                center_override = length(parts) >= 5 ?
-                    (parse(Float64, parts[3]), parse(Float64, parts[4]), parse(Float64, parts[5])) :
-                    length(parts) == 2 ? nothing :
-                    error("ORBITAL row must be `id xsf_path` or `id xsf_path cx cy cz`, got: $row")
-                push!(orb_rows, (id, xsf, center_override))
+                # spec :: (:none,) | (:center, (cx,cy,cz)) | (:lattice, (n1,n2,n3))
+                spec = if length(parts) >= 3 && uppercase(parts[3]) == "LATTICE"
+                    length(parts) >= 6 || error("ORBITAL ... LATTICE needs n1 n2 n3, got: $row")
+                    (:lattice, (parse(Int, parts[4]), parse(Int, parts[5]), parse(Int, parts[6])))
+                elseif length(parts) >= 5
+                    (:center, (parse(Float64, parts[3]), parse(Float64, parts[4]), parse(Float64, parts[5])))
+                elseif length(parts) == 2
+                    (:none, nothing)
+                else
+                    error("ORBITAL row: `id xsf` | `id xsf cx cy cz` | `id xsf LATTICE n1 n2 n3`, got: $row")
+                end
+                push!(orb_rows, (id, xsf, spec))
                 i += 1
             end
             i <= length(lines) || error("unexpected EOF inside BEGIN_ORBITALS")
@@ -167,16 +175,21 @@ function read_system_input(path::AbstractString)
     end
 
     orbitals = Dict{Int,OrbitalEntry}()
-    for (id, xsf, center_override) in orb_rows
+    for (id, xsf, spec) in orb_rows
         full = isabspath(xsf) ? xsf : joinpath(base, xsf)
-        c0 = if center_override === nothing
-            _, dg = read_xsf(full)
-            density_centroid(dg)
+        grid_shift = (0, 0, 0)
+        c0 = if spec[1] == :center
+            spec[2]
         else
-            center_override
+            st, dg = read_xsf(full)
+            if spec[1] == :lattice
+                grid_shift = _lattice_grid_shift(dg, st.primvec, spec[2])
+                dg = merge(dg, (; values = circshift(dg.values, grid_shift)))
+            end
+            density_centroid(dg)
         end
         c = ntuple(d -> c0[d] * unit_scale, 3)
-        orbitals[id] = OrbitalEntry(id, full, c)
+        orbitals[id] = OrbitalEntry(id, full, c, grid_shift)
     end
 
     boxes = BoxGeom[(center = b.center .* unit_scale,
