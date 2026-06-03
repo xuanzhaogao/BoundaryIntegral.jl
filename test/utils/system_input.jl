@@ -19,7 +19,13 @@ using Test
 
     @test sort(si.groups[1]) == [1]
     @test sort(si.groups[2]) == [2]
+end
 
-    @test_throws ErrorException read_system_input(
-        joinpath(fixdir, "system_multiatom_bad.bie"))
+@testset "density_centroid + centerless orbital" begin
+    fixdir = joinpath(@__DIR__, "..", "fixtures")
+    _, dg = BoundaryIntegral.read_xsf(joinpath(fixdir, "orb_a.xsf"))
+    c = BoundaryIntegral.density_centroid(dg)
+    @test all(isapprox.(c, (1.0, 1.0, 1.0); atol = 1e-12))   # all-ones on {0,2}^3 grid -> mean (1,1,1)
+    si = read_system_input(joinpath(fixdir, "system_centroid.bie"))
+    @test all(isapprox.(si.orbitals[1].center, (1.0, 1.0, 1.0); atol = 1e-12))
 end

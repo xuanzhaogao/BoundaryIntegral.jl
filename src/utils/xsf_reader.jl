@@ -161,6 +161,25 @@ function VolumeSource(datagrid; shift::NTuple{3,<:Real}=(0.0, 0.0, 0.0), tol::Re
     return VolumeSource(axes, weights, density, origin, basis; tol = T(tol))
 end
 
+"""
+    density_centroid(datagrid)
+
+Charge centroid sum(r*|phi|^2)/sum(|phi|^2) over the grid — the standard Wannier center.
+Assumes the function does not wrap the supercell boundary (interior-localized).
+"""
+function density_centroid(datagrid)
+    nx, ny, nz = datagrid.nx, datagrid.ny, datagrid.nz
+    sx = sy = sz = 0.0
+    sw = 0.0
+    for ix in 1:nx, iy in 1:ny, iz in 1:nz
+        w = abs2(datagrid.values[ix, iy, iz])
+        p = grid_point(datagrid, ix, iy, iz)
+        sx += w * p[1]; sy += w * p[2]; sz += w * p[3]; sw += w
+    end
+    sw > 0 || error("density_centroid: density has zero total weight")
+    return (sx / sw, sy / sw, sz / sw)
+end
+
 function datagrids_compatible(a, b; tol = 1e-10)
     a.nx == b.nx && a.ny == b.ny && a.nz == b.nz || return false
     maximum(abs.(a.origin .- b.origin)) <= tol &&

@@ -27,7 +27,7 @@ function read_system_input(path::AbstractString)
     boxes = BoxGeom[]
     epses = Float64[]
     eps_out = 1.0
-    orb_rows = Tuple{Int,String,Int}[]
+    orb_rows = Tuple{Int,String,Union{NTuple{3,Float64},Nothing}}[]
     cutoff = Inf
     overrides = Dict{Int,Vector{Int}}()
 
@@ -69,8 +69,11 @@ function read_system_input(path::AbstractString)
                 parts = split(row)
                 id = parse(Int, parts[1])
                 xsf = parts[2]
-                atom_idx = length(parts) >= 3 ? parse(Int, parts[3]) : 0
-                push!(orb_rows, (id, xsf, atom_idx))
+                center_override = length(parts) >= 5 ?
+                    (parse(Float64, parts[3]), parse(Float64, parts[4]), parse(Float64, parts[5])) :
+                    length(parts) == 2 ? nothing :
+                    error("ORBITAL row must be `id xsf_path` or `id xsf_path cx cy cz`, got: $row")
+                push!(orb_rows, (id, xsf, center_override))
                 i += 1
             end
             i <= length(lines) || error("unexpected EOF inside BEGIN_ORBITALS")
@@ -99,15 +102,15 @@ function read_system_input(path::AbstractString)
     end
 
     orbitals = Dict{Int,OrbitalEntry}()
-    for (id, xsf, atom_idx) in orb_rows
+    for (id, xsf, center_override) in orb_rows
         full = isabspath(xsf) ? xsf : joinpath(base, xsf)
-        structure, _ = read_xsf(full)
-        nat = size(structure.positions, 1)
-        a = atom_idx == 0 ? (nat == 1 ? 1 :
-            error("orbital $id: PRIMCOORD has $nat atoms; specify atom_index")) :
-            atom_idx
-        (1 <= a <= nat) || error("orbital $id: atom_index $a out of range 1:$nat")
-        c = ntuple(d -> structure.positions[a, d] * unit_scale, 3)
+        c0 = if center_override === nothing
+            _, dg = read_xsf(full)
+            density_centroid(dg)
+        else
+            center_override
+        end
+        c = ntuple(d -> c0[d] * unit_scale, 3)
         orbitals[id] = OrbitalEntry(id, full, c)
     end
 
