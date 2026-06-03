@@ -173,3 +173,97 @@ function rhs_dielectric_box3d_fmm3d_batched(
     end
     return F
 end
+
+"""
+    BatchedDielectricOperator
+
+Matrix-capable adjoint-double-layer + diagonal operator for the dielectric BIE. A single
+batched FMM (`nd = K`) serves an N x K block; the sparse near correction and the diagonal
+contrast term are applied as batched mat-mat / broadcasts.
+"""
+struct BatchedDielectricOperator
+    sources::Matrix{Float64}        # 3 x n
+    weights::Vector{Float64}        # n
+    norms::Matrix{Float64}          # 3 x n
+    thresh::Float64
+    corrections::SparseMatrixCSC{Float64,Int}
+    diag::Vector{Float64}           # n
+    n::Int
+end
+
+Base.size(op::BatchedDielectricOperator) = (op.n, op.n)
+Base.size(op::BatchedDielectricOperator, d::Integer) = d <= 2 ? op.n : 1
+Base.eltype(::BatchedDielectricOperator) = Float64
+
+function batched_lhs_dielectric_box3d_fmm3d_corrected(
+    interface::DielectricInterface{P, Float64},
+    fmm_tol::Float64, up_tol::Float64, max_order::Int;
+    range_factor::Float64 = 5.0, correct_edges::Bool = false,
+    adaptive_atol::Float64 = up_tol, adaptive_rtol::Float64 = sqrt(eps(Float64)),
+    adaptive_n_GL::Int = 0, adaptive_max_depth::Int = 20,
+) where {P <: AbstractPanel}
+    n = num_points(interface)
+    sources = zeros(Float64, 3, n)
+    weights = zeros(Float64, n)
+    norms = zeros(Float64, 3, n)
+    for (i, point) in enumerate(eachpoint(interface))
+        weights[i] = point.panel_point.weight
+        sources[1, i] = point.panel_point.point[1]
+        sources[2, i] = point.panel_point.point[2]
+        sources[3, i] = point.panel_point.point[3]
+        norms[1, i] = point.panel_point.normal[1]
+        norms[2, i] = point.panel_point.normal[2]
+        norms[3, i] = point.panel_point.normal[3]
+    end
+
+    adaptive_cfg = AdaptiveConfig(adaptive_atol, adaptive_rtol, adaptive_n_GL, adaptive_max_depth)
+    (; upsample, adaptive) = build_neighbor_list(interface, max_order, up_tol;
+        range_factor = range_factor, correct_edges = correct_edges, adaptive_cfg = adaptive_cfg)
+    corrections = laplace3d_DT_corrections(interface, upsample, adaptive)
+
+    diag = Vector{Float64}(undef, n)
+    offset = 0
+    for i in 1:length(interface.panels)
+        eps_in = interface.eps_in[i]; eps_out = interface.eps_out[i]
+        np = num_points(interface.panels[i])
+        t = 0.5 * (eps_out + eps_in) / (eps_out - eps_in)
+        for j in 1:np
+            diag[offset + j] = t
+        end
+        offset += np
+    end
+
+    return BatchedDielectricOperator(sources, weights, norms, fmm_tol,
+        SparseMatrixCSC{Float64,Int}(corrections), diag, n)
+end
+
+# matrix matvec: one batched FMM for all K columns
+function LinearAlgebra.mul!(Y::AbstractMatrix, op::BatchedDielectricOperator, X::AbstractMatrix)
+    n = op.n; K = size(X, 2)
+    size(X, 1) == n || throw(DimensionMismatch())
+    charges = Matrix{Float64}(undef, K, n)
+    @inbounds for k in 1:K, i in 1:n
+        charges[k, i] = op.weights[i] * X[i, k]
+    end
+    vals = lfmm3d(op.thresh, op.sources, charges = charges, pg = 2, nd = K)
+    grad = reshape(vals.grad, K, 3, n)    # (K, 3, n); handles nd==1 singleton drop
+    C = op.corrections * X                # n x K (sparse mat-mat)
+    @inbounds for k in 1:K, i in 1:n
+        gn = op.norms[1, i] * grad[k, 1, i] +
+             op.norms[2, i] * grad[k, 2, i] +
+             op.norms[3, i] * grad[k, 3, i]
+        Y[i, k] = -gn / (4π) + C[i, k] + op.diag[i] * X[i, k]
+    end
+    return Y
+end
+
+function LinearAlgebra.mul!(y::AbstractVector, op::BatchedDielectricOperator, x::AbstractVector)
+    Y = reshape(y, op.n, 1)
+    mul!(Y, op, reshape(x, op.n, 1))
+    return y
+end
+
+Base.:*(op::BatchedDielectricOperator, X::AbstractMatrix) =
+    mul!(Matrix{Float64}(undef, op.n, size(X, 2)), op, X)
+Base.:*(op::BatchedDielectricOperator, x::AbstractVector) =
+    mul!(Vector{Float64}(undef, op.n), op, x)

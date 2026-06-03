@@ -55,4 +55,27 @@ using Test
         f_ref = rhs_dielectric_box3d_fmm3d(interface, vs, 1e-9)   # screened convenience method
         @test maximum(abs.(F[:, 1] .- f_ref)) < 1e-6
     end
+
+    @testset "batched matvec == columnwise (Unit 5)" begin
+        fixdir = joinpath(@__DIR__, "..", "fixtures")
+        si = read_system_input(joinpath(fixdir, "system_small.bie"))
+        g = assemble_rhs_group(si, 1)
+        interface = build_group_interface(si, g; n_quad = 6, rhs_atol = 1e-3, l_ec = 0.25)
+
+        Np = BoundaryIntegral.num_points(interface)
+        op  = batched_lhs_dielectric_box3d_fmm3d_corrected(interface, 1e-9, 1e-9, 8)
+        ref = lhs_dielectric_box3d_fmm3d_corrected(interface, 1e-9, 1e-9, 8)
+
+        # vector path matches the reference LinearMap
+        x = collect(range(0.1, 1.0; length = Np))
+        @test maximum(abs.(op * x .- ref * x)) < 1e-9
+
+        # matrix path equals applying the reference to each column
+        X = hcat(x, reverse(x), fill(0.5, Np))
+        Y = op * X
+        @test size(Y) == size(X)
+        for c in 1:size(X, 2)
+            @test maximum(abs.(Y[:, c] .- ref * X[:, c])) < 1e-8
+        end
+    end
 end
