@@ -161,7 +161,7 @@ function rhs_dielectric_box3d_fmm3d_batched(
         normals[3, i] = point.panel_point.normal[3]
     end
 
-    vals = lfmm3d(thresh, group.positions, charges = charges, targets = targets, pgt = 2)
+    vals = lfmm3d(thresh, group.positions, charges = charges, targets = targets, pgt = 2, nd = K)
     # FMM3D returns gradtarg as (nd, 3, n_points) for nd > 1, but drops the leading
     # singleton dim to (3, n_points) when nd == 1. Reshape to a uniform (K, 3, n_points).
     grad = reshape(vals.gradtarg, K, 3, n_points)
