@@ -27,4 +27,17 @@ using Test
         @test size(g.positions, 2) == size(g.densities, 1)
         @test all(g.densities[:, 1] .≈ 1.0)        # rho_11 = 1
     end
+
+    @testset "envelope + group interface" begin
+        fixdir = joinpath(@__DIR__, "..", "fixtures")
+        si = read_system_input(joinpath(fixdir, "system_small.bie"))
+        g = assemble_rhs_group(si, 1)
+        env = BoundaryIntegral.envelope_volume_source(g)
+        @test length(env.density) == size(g.densities, 1)
+        @test all(env.density .≈ 1.0)              # rss of a single all-ones column
+
+        interface = build_group_interface(si, g; n_quad = 6, rhs_atol = 1e-3, l_ec = 0.25)
+        @test interface isa DielectricInterface
+        @test length(interface.panels) >= 6        # at least the 6 box faces
+    end
 end

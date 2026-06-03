@@ -56,7 +56,7 @@ export solve_lu, solve_gmres
 export read_system_input, SystemInput, OrbitalEntry
 
 # multi-rhs solver
-export pair_density_source, RHSGroup, assemble_rhs_group
+export pair_density_source, RHSGroup, assemble_rhs_group, build_group_interface
 
 # visualization
 export viz_2d, viz_3d

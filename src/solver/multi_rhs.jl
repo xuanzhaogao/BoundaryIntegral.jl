@@ -74,3 +74,36 @@ function assemble_rhs_group(si::SystemInput, center_id::Int; tol::Real = 0.0)
     end
     return RHSGroup(center_id, copy(js), positions, weights, densities)
 end
+
+"""
+    envelope_volume_source(g::RHSGroup)
+
+Per-point root-sum-square of the group's densities, as a VolumeSource on the shared grid.
+Drives the union/envelope refinement so the single panelization resolves every member.
+"""
+function envelope_volume_source(g::RHSGroup)
+    n = size(g.densities, 1)
+    env = Vector{Float64}(undef, n)
+    @inbounds for s in 1:n
+        acc = 0.0
+        for k in 1:size(g.densities, 2)
+            acc += g.densities[s, k]^2
+        end
+        env[s] = sqrt(acc)
+    end
+    return VolumeSource(copy(g.positions), copy(g.weights), env)
+end
+
+"""
+    build_group_interface(si, g; n_quad, rhs_atol, l_ec, eps_out=si.eps_out, max_depth=128)
+
+One shared union/envelope-refined DielectricInterface for the whole group.
+"""
+function build_group_interface(si::SystemInput, g::RHSGroup;
+        n_quad::Int, rhs_atol::Float64, l_ec::Float64,
+        eps_out::Float64 = si.eps_out, max_depth::Int = 128)
+    env = envelope_volume_source(g)
+    return multi_dielectric_box3d_rhs_adaptive(
+        n_quad, l_ec, si.boxes, si.epses, env, rhs_atol;
+        eps_out = eps_out, max_depth = max_depth)
+end
