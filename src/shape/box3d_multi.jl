@@ -452,6 +452,31 @@ function multi_dielectric_box3d_rhs_adaptive(
     )
 end
 
+# Screened multi-source convenience: takes a vector of (unscreened) VolumeSources, screens
+# each against the dielectric boxes, and builds ONE interface refined to resolve every source.
+function multi_dielectric_box3d_rhs_adaptive(
+    n_quad::Int, l_ec::T,
+    boxes::Vector{<:NamedTuple},
+    epses::Vector{T},
+    vss::Vector{<:VolumeSource{T, 3}},
+    rhs_atol::T;
+    eps_out::T = one(T),
+    max_depth::Int = 128,
+    alpha::T = T(sqrt(T(2))),
+    tkm_kmax::Union{Nothing, T} = nothing,
+) where T
+    screened = VolumeSource{T, 3}[
+        screened_volume_source(boxes, epses, eps_out, vs, SharpScreening()) for vs in vss
+    ]
+    eps_srcs = ones(T, length(screened))
+    return multi_dielectric_box3d_rhs_adaptive(
+        n_quad, l_ec, boxes, epses, screened, eps_srcs, rhs_atol, eps_out;
+        max_depth = max_depth, alpha = alpha, tkm_kmax = tkm_kmax,
+    )
+end
+
+# Single-source convenience: delegates to the multi-source core with a 1-element vector,
+# so the single-source path is bit-for-bit the old behavior.
 function multi_dielectric_box3d_rhs_adaptive(
     n_quad::Int, l_ec::T,
     boxes::Vector{<:NamedTuple},
@@ -464,8 +489,30 @@ function multi_dielectric_box3d_rhs_adaptive(
     alpha::T = T(sqrt(T(2))),
     tkm_kmax::Union{Nothing, T} = nothing,
 ) where T
+    return multi_dielectric_box3d_rhs_adaptive(
+        n_quad, l_ec, boxes, epses, VolumeSource{T, 3}[vs], T[eps_src], rhs_atol, eps_out;
+        max_depth = max_depth, alpha = alpha, tkm_kmax = tkm_kmax,
+    )
+end
+
+# Multi-source core: builds ONE shared interface, refining each panel until EVERY source's
+# RHS is resolved (per-source union refinement). The single-source method above is the K=1 case.
+function multi_dielectric_box3d_rhs_adaptive(
+    n_quad::Int, l_ec::T,
+    boxes::Vector{<:NamedTuple},
+    epses::Vector{T},
+    vss::Vector{<:VolumeSource{T, 3}},
+    eps_srcs::Vector{T},
+    rhs_atol::T,
+    eps_out::T = one(T);
+    max_depth::Int = 128,
+    alpha::T = T(sqrt(T(2))),
+    tkm_kmax::Union{Nothing, T} = nothing,
+) where T
     @assert length(boxes) == length(epses) "Number of boxes must match number of permittivities"
     @assert length(boxes) >= 1 "At least one box is required"
+    @assert length(vss) == length(eps_srcs) "need one eps_src per source"
+    @assert !isempty(vss) "at least one source is required"
 
     regions = _multi_box3d_face_regions(boxes, epses, eps_out)
     n_regions = length(regions)
@@ -475,11 +522,11 @@ function multi_dielectric_box3d_rhs_adaptive(
     ws = T.(ws)
     max_depth = max(max_depth, 0)
     fmm_tol = rhs_atol * T(0.1)
-    h = _estimate_source_spacing(vs)
-    resolved_tkm_kmax = isnothing(tkm_kmax) ? _estimate_tkm3dc_kmax(h) : tkm_kmax
-    resolved_tkm_kmax > zero(T) || throw(ArgumentError("tkm_kmax must be positive"))
+    hs = T[_estimate_source_spacing(vs) for vs in vss]
+    kmaxs = T[isnothing(tkm_kmax) ? _estimate_tkm3dc_kmax(h) : tkm_kmax for h in hs]
+    all(>(zero(T)), kmaxs) || throw(ArgumentError("tkm_kmax must be positive"))
 
-    @info "multi_dielectric_box3d rhs adaptive: $n_regions face regions, $(length(vs.density)) source points"
+    @info "multi_dielectric_box3d rhs adaptive: $n_regions face regions, $(length(vss)) source(s)"
 
     # Initialize panels at depth 0 for each region
     panels_by_depth = [[TempPanel3D{T}[] for _ in 0:max_depth] for _ in 1:n_regions]
@@ -518,9 +565,14 @@ function multi_dielectric_box3d_rhs_adaptive(
         end
 
         @info "  depth $depth, panels: $(length(all_panels))"
-        resolved = _rhs_panel3d_resolved_volume_fmm(
-            all_panels, vs, eps_src, ns, ws, rhs_atol, fmm_tol, h, resolved_tkm_kmax,
-        )
+        # A panel is resolved only if it resolves EVERY source's RHS (union refinement).
+        resolved = trues(length(all_panels))
+        for k in eachindex(vss)
+            rk = _rhs_panel3d_resolved_volume_fmm(
+                all_panels, vss[k], eps_srcs[k], ns, ws, rhs_atol, fmm_tol, hs[k], kmaxs[k],
+            )
+            resolved .&= rk
+        end
 
         offset = 0
         for r in 1:n_regions
