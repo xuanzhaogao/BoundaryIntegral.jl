@@ -31,10 +31,83 @@ group.
 
 ## Scope (this deliverable)
 
-**Steps 1–6 only: grouping → shared mesh → batched RHS → vectorized matvec → block GMRES,
-stopping at the layer densities $\Sigma$.** The post-refinement evaluation and final
-contraction to $V_{ijkl}$ (Step 7, Sec. 3 / Algorithm 1 steps 4–5 of the paper) are a
-follow-on, not part of this branch's first deliverable.
+**Step 0 + Steps 1–6: parse system input → grouping → shared mesh → batched RHS →
+vectorized matvec → block GMRES, stopping at the layer densities $\Sigma$.** The
+post-refinement evaluation and final contraction to $V_{ijkl}$ (Step 7, Sec. 3 / Algorithm 1
+steps 4–5 of the paper) are a follow-on, not part of this branch's first deliverable.
+
+## Step 0 — System input file
+
+A single human-editable text file is the entry point. It describes (a) the dielectric
+geometry, (b) the orbitals — each a path to an `.xsf` holding one orbital $\varphi_i$ on a
+grid — and (c) the grouping rule that produces the per-center batches. Pair densities
+$\rho_{ij} = \varphi_i\varphi_j$ are **formed in-code** by pointwise product; the file lists
+orbitals, not products.
+
+### Format
+
+`.xsf`-style keyword blocks (`BEGIN_<NAME>` … `END_<NAME>`), `#` comments, blank lines
+ignored. Proposed extension `.bie`. Paths are resolved relative to the input file's directory.
+
+```
+# BoundaryIntegral system input
+UNITS bohr                      # bohr | angstrom — applies to all lengths/positions below
+
+BEGIN_DIELECTRICS
+EPS_OUT 1.0                     # permittivity outside all boxes (vacuum)
+# one row per box:  cx cy cz    Lx Ly Lz    eps
+  0.0 0.0 0.0     20.0 20.0 4.0    11.7
+  0.0 0.0 8.0     20.0 20.0 4.0     3.9
+END_DIELECTRICS
+
+BEGIN_ORBITALS
+# one row per orbital:  id   xsf_path   [atom_index]
+# center is read from the .xsf PRIMCOORD; atom_index selects which atom and is
+# required only when PRIMCOORD lists more than one atom.
+  1   wann_00001.xsf
+  2   wann_00002.xsf   5
+END_ORBITALS
+
+BEGIN_GROUPING
+CUTOFF 8.0                      # default: center i groups with every j (including i)
+                                # whose center lies within 8.0 of i's center
+# optional explicit overrides — one per line:  i : j1 j2 j3 ...
+# OVERRIDE replaces the cutoff-derived neighbor set for center i
+  3 : 3 4 7
+END_GROUPING
+```
+
+### Parser output
+
+A struct (e.g. `SystemInput`) carrying:
+- `unit_scale` (factor to internal units),
+- `boxes::Vector{NamedTuple}` (`center, Lx, Ly, Lz`), `epses::Vector`, `eps_out` — feeding
+  the existing `multi_dielectric_box3d_*` machinery directly,
+- `orbitals`: `id ↦ (xsf_path, center)` with `center` taken from the `.xsf` `PRIMCOORD`,
+- `groups`: for each center $i$, the resolved neighbor list $\{j\}$ (cutoff, then overrides).
+
+This is exactly the input Unit 1 consumes: each group $\{(i,j)\}$ becomes one `RHSGroup`,
+with $\rho_{ij}$ produced by loading $\varphi_i, \varphi_j$ from their `.xsf` grids and
+multiplying.
+
+### Assumptions & edge cases
+
+- **Common product grid.** Forming $\varphi_i\varphi_j$ requires both orbitals on the same
+  grid. Wannier90 typically writes every WF on one supercell grid (identical `PRIMVEC`,
+  dimensions, origin), making the product a pointwise multiply. The loader **validates grid
+  compatibility** for each pair; if grids differ, the fallback is to resample $\varphi_j$ onto
+  $\varphi_i$'s grid via the existing trilinear interpolation
+  (`_datagrid_trilinear_value`). The product $\rho_{ij}$ is supported only where both factors
+  are non-negligible, so it is truncated/thresholded to that overlap region (reusing
+  `VolumeSource`'s `tol`).
+- **Center from PRIMCOORD.** If a `.xsf` PRIMCOORD lists exactly one atom, `atom_index` may be
+  omitted. If it lists several and `atom_index` is absent, that is a parse error (no silent
+  guess). *(Open question flagged for review: whether to allow a density-centroid fallback
+  here instead of erroring.)*
+- **Self pairs.** The cutoff set includes $i$ itself, so the self-density $\rho_{ii}$ is part
+  of each group.
+- **Units.** `UNITS` scales box geometry and the cutoff consistently with the `.xsf`
+  coordinate units; mismatched `.xsf` units are out of scope (assumed consistent with `UNITS`).
 
 ## Governing constraint
 
@@ -67,14 +140,23 @@ is the blocking.**
 
 Six units, each independently testable.
 
+### Unit 0 — System input parser
+Parse the Step 0 `.bie` file into a `SystemInput` (see Step 0 above): unit scale, dielectric
+boxes + permittivities, orbital table (`id ↦ xsf_path, center`), and the resolved per-center
+neighbor groups. Centers are read from each `.xsf` PRIMCOORD.
+- **Input:** path to `.bie` file.
+- **Output:** `SystemInput`.
+- **Depends on:** `read_xsf` (`src/utils/xsf_reader.jl`) for centers/grids.
+
 ### Unit 1 — `RHSGroup` (group assembly)
 A container for one center's batch: the shared center $i$, the $K$ neighbor densities
-$\{\rho_{ij}\}$ (as `VolumeSource`s or `PointSource`s), and bookkeeping (which $(i,j)$ each
-column is). Construction takes orbital centers + a neighbor list and emits one `RHSGroup`
-per center.
-- **Input:** orbital data + neighbor list.
-- **Output:** `RHSGroup` with `Vector{<:AbstractSource}` of length $K$.
-- **Depends on:** existing source types only.
+$\{\rho_{ij}\}$ (as `VolumeSource`s), and bookkeeping (which $(i,j)$ each column is).
+Construction consumes a `SystemInput` group: for each $j$ in $\mathrm{neigh}(i)$, load
+$\varphi_i,\varphi_j$ from their `.xsf` grids and form $\rho_{ij}=\varphi_i\varphi_j$ as a
+`VolumeSource` (validating/aligning grids per the Step-0 assumptions).
+- **Input:** `SystemInput` + a center id.
+- **Output:** `RHSGroup` with `Vector{VolumeSource}` of length $K$.
+- **Depends on:** Unit 0, source types, `_datagrid_trilinear_value` (fallback resampling).
 
 ### Unit 2 — Shared per-group panelization (union/envelope refinement)
 Extend the RHS-driven refinement so a panel is refined until the interpolation-error
@@ -124,8 +206,11 @@ shared interface (needed by the eventual Step-7 evaluation).
 ## Data flow
 
 ```
-orbital centers + neighbor list
-        │  Unit 1
+   system .bie file
+        │  Unit 0
+        ▼
+   SystemInput {boxes, epses, eps_out, orbitals, groups}
+        │  Unit 1   (load .xsf, form rho_ij = phi_i * phi_j)
         ▼
    RHSGroup {center i, sources[1..K]}
         │  Unit 2  (union/envelope refinement)
@@ -152,6 +237,12 @@ orbital centers + neighbor list
 
 ## Testing strategy
 
+0. **Parser round-trip:** a fixture `.bie` file parses to the expected `SystemInput`
+   (boxes, epses, eps_out, orbital table, resolved groups incl. cutoff + override); malformed
+   inputs (missing block, multi-atom PRIMCOORD without `atom_index`) raise clear errors.
+   Pair-density formation $\rho_{ij}=\varphi_i\varphi_j$ matches a pointwise product on a
+   shared-grid fixture, and the resample fallback matches trilinear interpolation on a
+   mismatched-grid fixture.
 1. **Single-RHS regression:** $K=1$ block path reproduces the current single solve to machine
    precision on an existing box3d test case.
 2. **Batched-matvec correctness:** Unit-5 `mul!(Y, op, X)` equals column-wise application of
