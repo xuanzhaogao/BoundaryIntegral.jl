@@ -91,14 +91,19 @@ using Krylov
         end
     end
 
-    @testset "end-to-end .bie -> Sigma" begin
-        out = solve_dielectric_box3d_group(
-            joinpath(fixdir, "system_small.bie"), 1;
-            n_quad = NQ, rhs_atol = RTOL_REFINE, l_ec = LEC,
-            fmm_tol = FT, up_tol = UT, max_order = MO, rtol = GTOL)
+    @testset "end-to-end .bie -> Sigma (params from BEGIN_SOLVE)" begin
+        out = solve_dielectric_box3d_group(joinpath(fixdir, "system_small.bie"), 1)
         @test size(out.sigma, 2) == 1
         @test size(out.sigma, 1) == BoundaryIntegral.num_points(out.interface)
         @test all(isfinite, out.sigma)
+        @test out.labels == ["rho_1_1"]
+    end
+
+    @testset "four_index_integrals .bie -> V (Step 7)" begin
+        res = four_index_integrals(joinpath(fixdir, "system_small.bie"), 1)
+        @test size(res.V) == (1, 1)
+        @test isfinite(res.V[1, 1])
+        @test res.labels == ["rho_1_1"]
     end
 
     # ---- K=2 system: build ONCE ----

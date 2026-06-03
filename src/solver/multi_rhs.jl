@@ -397,26 +397,91 @@ function solve_dielectric_box3d_block(
     return Krylov.block_gmres(op, F; rtol = rtol, atol = atol, itmax = itmax)
 end
 
-"""
-    solve_dielectric_box3d_group(bie_path, center_id; kw...) -> (; sigma, interface, group, stats)
-
-Step 0 + Steps 1-6: parse the .bie file, assemble the center group, build the shared
-union/envelope-refined interface, assemble the batched RHS, and block-GMRES solve for the
-layer densities Σ (N x K). Stops at Σ (evaluation/contraction are out of scope).
-"""
-function solve_dielectric_box3d_group(bie_path::AbstractString, center_id::Int;
-        n_quad::Int, rhs_atol::Float64, l_ec::Float64,
-        fmm_tol::Float64 = 1e-9, up_tol::Float64 = 1e-9, max_order::Int = 8,
-        rtol::Float64 = 1e-10, itmax::Int = 500, support_rtol::Real = 1e-6,
-        max_depth::Int = 128)
-    si = read_system_input(bie_path)
-    group = assemble_rhs_group(si, center_id; support_rtol = support_rtol)
-    isempty(group.neighbor_ids) &&
-        return (; sigma = zeros(0, 0), interface = nothing, group = group, stats = nothing)
-    interface = build_group_interface(si, group;
-        n_quad = n_quad, rhs_atol = rhs_atol, l_ec = l_ec, max_depth = max_depth)
-    op = batched_lhs_dielectric_box3d_fmm3d_corrected(interface, fmm_tol, up_tol, max_order)
-    F = rhs_dielectric_box3d_fmm3d_batched(interface, si, group, fmm_tol)
-    Σ, stats = _block_gmres_solve(op, F; rtol = rtol, itmax = itmax)
-    return (; sigma = Σ, interface = interface, group = group, stats = stats)
+# Split an RHSGroup's shared-grid density columns into the Vector{VolumeSource} core form.
+function group_volume_sources(g::RHSGroup)
+    return VolumeSource{Float64, 3}[
+        VolumeSource(copy(g.positions), copy(g.weights), g.densities[:, k]) for k in 1:num_pairs(g)
+    ]
 end
+
+"""
+    solve_dielectric_box3d_group(si::SystemInput, center_id; support_rtol=si.solve.support_rtol)
+    solve_dielectric_box3d_group(bie_path, center_id; ...)
+
+High-level Steps 0–6 (all solver knobs from the `.bie` `BEGIN_SOLVE` block / `si.solve`):
+assemble the center group's pair densities, build ONE shared interface refined per-source in
+the real `.xsf` coordinate frame, and block-GMRES solve for the layer densities Σ (N×K).
+Returns `(; sigma, interface, sources, group, stats, labels)`. Uses the `Vector{VolumeSource}`
+core throughout.
+"""
+function solve_dielectric_box3d_group(si::SystemInput, center_id::Int;
+        support_rtol::Real = si.solve.support_rtol)
+    group = assemble_rhs_group(si, center_id; support_rtol = support_rtol)
+    js = group.neighbor_ids
+    labels = ["rho_$(center_id)_$(j)" for j in js]
+    isempty(js) && return (; sigma = zeros(0, 0), interface = nothing,
+        sources = VolumeSource{Float64, 3}[], group = group, stats = nothing, labels = labels)
+    sp = si.solve
+    sources = group_volume_sources(group)
+    interface = multi_dielectric_box3d_rhs_adaptive(
+        sp.n_quad, resolved_l_ec(si), si.boxes, si.epses, sources, sp.rhs_tol;
+        eps_out = si.eps_out, max_depth = sp.max_depth)
+    Σ, stats = solve_dielectric_box3d_block(interface, sources;
+        fmm_tol = sp.lhs_tol, up_tol = sp.lhs_tol, max_order = sp.max_order, rtol = sp.gmres_rtol)
+    return (; sigma = Σ, interface = interface, sources = sources, group = group,
+            stats = stats, labels = labels)
+end
+
+solve_dielectric_box3d_group(bie_path::AbstractString, center_id::Int; kw...) =
+    solve_dielectric_box3d_group(read_system_input(bie_path), center_id; kw...)
+
+"""
+    four_index_matrix(si, interface, sources, Σ) -> K×K
+
+Step 7: the four-index integrals `V[a,b] = ∫ ρ_a (u_inc[ρ_b] + u[σ_b]) dx` over a solved
+group. `u_inc` is the incident potential of the SCREENED source (TKM volume solve); `u[σ_b]`
+is the scattered layer potential (FMM + hcubature near correction); the contraction uses the
+RAW target density. All sources share the grid, so the layer-potential operator and each
+`u_inc` are built once and reused across columns.
+"""
+function four_index_matrix(si::SystemInput, interface, sources::Vector{<:VolumeSource{Float64, 3}},
+        Σ::AbstractMatrix)
+    K = length(sources)
+    K == 0 && return zeros(Float64, 0, 0)
+    sp = si.solve
+    targets = sources[1].positions
+    pottrg = laplace3d_pottrg_fmm3d_corrected_hcubature(interface, targets, sp.lhs_tol, sp.lhs_tol, 5.0)
+    u_inc = Vector{Vector{Float64}}(undef, K)
+    for b in 1:K
+        sb = screened_volume_source(interface, sources[b], SharpScreening())
+        vals = TKM3D.ltkm3dc(sp.volume_tol, sb.positions; charges = sb.weights .* sb.density,
+                             targets = targets, pgt = 1, kmax = _estimate_tkm3dc_kmax(sb))
+        vals.ier == 0 || error("TKM3D.ltkm3dc failed, ier=$(vals.ier)")
+        u_inc[b] = real.(vals.pottarg)
+    end
+    tw = [sources[a].weights .* sources[a].density for a in 1:K]
+    V = Matrix{Float64}(undef, K, K)
+    for b in 1:K
+        φb = u_inc[b] .+ (pottrg * Σ[:, b])
+        for a in 1:K
+            V[a, b] = dot(tw[a], φb)
+        end
+    end
+    return V
+end
+
+"""
+    four_index_integrals(si_or_bie_path, center_id; kw...) -> (; V, labels, sigma, interface, sources, group, stats)
+
+One-shot Steps 0–7 for a center group: solve for Σ, then evaluate the K×K four-index matrix V.
+"""
+function four_index_integrals(si::SystemInput, center_id::Int; kw...)
+    sol = solve_dielectric_box3d_group(si, center_id; kw...)
+    V = isempty(sol.sources) ? zeros(Float64, 0, 0) :
+        four_index_matrix(si, sol.interface, sol.sources, sol.sigma)
+    return (; V = V, labels = sol.labels, sigma = sol.sigma, interface = sol.interface,
+            sources = sol.sources, group = sol.group, stats = sol.stats)
+end
+
+four_index_integrals(bie_path::AbstractString, center_id::Int; kw...) =
+    four_index_integrals(read_system_input(bie_path), center_id; kw...)

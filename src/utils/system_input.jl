@@ -7,6 +7,26 @@ struct OrbitalEntry
     center::NTuple{3,Float64}
 end
 
+"""
+    SolveParams
+
+Solver parameters parsed from the `.bie` `BEGIN_SOLVE` block (all optional; defaults shown).
+`l_ec` takes precedence over `edge_refine_level`; if neither is given, `resolved_l_ec` uses
+level 4 against the thinnest box (matching the monolayer reference convention).
+"""
+Base.@kwdef struct SolveParams
+    n_quad::Int = 6
+    edge_refine_level::Union{Int,Nothing} = nothing
+    l_ec::Union{Float64,Nothing} = nothing
+    rhs_tol::Float64 = 1e-3
+    lhs_tol::Float64 = 1e-5
+    gmres_rtol::Float64 = 1e-5
+    support_rtol::Float64 = 1e-6
+    volume_tol::Float64 = 1e-6
+    max_order::Int = 8
+    max_depth::Int = 128
+end
+
 struct SystemInput
     unit_scale::Float64
     boxes::Vector{BoxGeom}
@@ -14,6 +34,37 @@ struct SystemInput
     eps_out::Float64
     orbitals::Dict{Int,OrbitalEntry}
     groups::Dict{Int,Vector{Int}}
+    solve::SolveParams
+end
+
+function _build_solve_params(d::AbstractDict)
+    pInt(k, dflt)   = haskey(d, k) ? parse(Int, d[k]) : dflt
+    pFloat(k, dflt) = haskey(d, k) ? parse(Float64, d[k]) : dflt
+    return SolveParams(
+        n_quad            = pInt("N_QUAD", 6),
+        edge_refine_level = haskey(d, "EDGE_REFINE_LEVEL") ? parse(Int, d["EDGE_REFINE_LEVEL"]) : nothing,
+        l_ec              = haskey(d, "L_EC") ? parse(Float64, d["L_EC"]) : nothing,
+        rhs_tol           = pFloat("RHS_TOL", 1e-3),
+        lhs_tol           = pFloat("LHS_TOL", 1e-5),
+        gmres_rtol        = pFloat("GMRES_RTOL", 1e-5),
+        support_rtol      = pFloat("SUPPORT_RTOL", 1e-6),
+        volume_tol        = pFloat("VOLUME_TOL", 1e-6),
+        max_order         = pInt("MAX_ORDER", 8),
+        max_depth         = pInt("MAX_DEPTH", 128),
+    )
+end
+
+"""
+    resolved_l_ec(si) -> Float64
+
+Edge/corner refinement target size: `si.solve.l_ec` if set, else
+`min(box.Lz) / 2^edge_refine_level * 1.01` (level defaults to 4).
+"""
+function resolved_l_ec(si::SystemInput)
+    si.solve.l_ec !== nothing && return si.solve.l_ec
+    level = si.solve.edge_refine_level === nothing ? 4 : si.solve.edge_refine_level
+    minLz = minimum(b.Lz for b in si.boxes)
+    return minLz / 2.0^level * 1.01
 end
 
 _clean(line) = strip(first(split(line, '#')))
@@ -30,6 +81,7 @@ function read_system_input(path::AbstractString)
     orb_rows = Tuple{Int,String,Union{NTuple{3,Float64},Nothing}}[]
     cutoff = Inf
     overrides = Dict{Int,Vector{Int}}()
+    solve_dict = Dict{String,String}()
 
     i = 1
     while i <= length(lines)
@@ -96,6 +148,19 @@ function read_system_input(path::AbstractString)
             end
             i <= length(lines) || error("unexpected EOF inside BEGIN_GROUPING")
             i += 1  # skip END_GROUPING
+        elseif s == "BEGIN_SOLVE"
+            i += 1
+            while i <= length(lines) && lines[i] != "END_SOLVE"
+                row = lines[i]
+                if !isempty(row)
+                    parts = split(row)
+                    length(parts) >= 2 || error("SOLVE line needs `KEY value`, got: $row")
+                    solve_dict[uppercase(parts[1])] = parts[2]
+                end
+                i += 1
+            end
+            i <= length(lines) || error("unexpected EOF inside BEGIN_SOLVE")
+            i += 1  # skip END_SOLVE
         else
             error("Unrecognized top-level line: $s")
         end
@@ -136,5 +201,5 @@ function read_system_input(path::AbstractString)
         groups[ci] = copy(lst)
     end
 
-    return SystemInput(unit_scale, boxes, epses, eps_out, orbitals, groups)
+    return SystemInput(unit_scale, boxes, epses, eps_out, orbitals, groups, _build_solve_params(solve_dict))
 end
