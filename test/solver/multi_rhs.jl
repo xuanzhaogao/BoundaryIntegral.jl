@@ -11,6 +11,8 @@ using Test
             joinpath(fixdir, "orb_a.xsf"), joinpath(fixdir, "orb_a.xsf"))
         @test length(vs.density) == 8          # 2*2*2 grid points
         @test all(vs.density .≈ 1.0)            # 1 * 1
-        @test sum(vs.weights) ≈ 8.0             # cell volume 1.0 each (jacobian/(n))
+        # weights must match VolumeSource(datagrid) exactly so a pair density
+        # integrates identically to a single-orbital density
+        @test sum(vs.weights) ≈ sum(BoundaryIntegral.VolumeSource(dg).weights)
     end
 end

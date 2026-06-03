@@ -182,12 +182,9 @@ function VolumeSource(datagrid, density::AbstractArray{<:Real,3};
             collect(T((k - 1) / nz) for k in 1:nz))
     At, Bt, Ct = true_cell_vectors(datagrid)
     basis = ((At[1], At[2], At[3]), (Bt[1], Bt[2], Bt[3]), (Ct[1], Ct[2], Ct[3]))
-    # Use raw cell vectors A, B, C for the jacobian so that weights integrate the
-    # periodic cell correctly: jac = |det([A, B, C])|, weight = jac / (nx*ny*nz).
-    A = collect(Tuple(datagrid.A))
-    B = collect(Tuple(datagrid.B))
-    C = collect(Tuple(datagrid.C))
-    jac = abs(det(hcat(A, B, C)))
+    # Match the weight convention of VolumeSource(datagrid) exactly (true cell vectors),
+    # so a pair density integrates identically to a single-orbital density.
+    jac = abs(det(hcat(collect(At), collect(Bt), collect(Ct))))
     weights = fill(jac / (nx * ny * nz), nx, ny, nz)
     dens = Array{T,3}(density)
     shift_f = (Float64(shift[1]), Float64(shift[2]), Float64(shift[3]))
