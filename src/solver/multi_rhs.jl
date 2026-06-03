@@ -122,8 +122,13 @@ function rhs_dielectric_box3d_fmm3d_batched(
     n = size(group.positions, 2)
     K = num_pairs(group)
     n_points = num_points(interface)
+    n == 0 && return zeros(Float64, n_points, K)
 
-    # per-point screening factor 1/eps_local (identical across columns -> nd-batchable)
+    # Per-point screening factor 1/eps_local (identical across columns -> nd-batchable).
+    # Box containment must match the reference screening (_screened_volume_density_multibox):
+    # same _point_in_box helper and the same boundary tolerance, so a point on/near a box
+    # face is classified identically and the batched RHS reproduces the single-RHS path.
+    box_tol = sqrt(eps(Float64)) * maximum(b -> max(abs(b.Lx), abs(b.Ly), abs(b.Lz)), si.boxes)
     inv_eps = Vector{Float64}(undef, n)
     @inbounds for s in 1:n
         pos = (group.positions[1, s], group.positions[2, s], group.positions[3, s])
@@ -132,7 +137,7 @@ function rhs_dielectric_box3d_fmm3d_batched(
             box = si.boxes[b]
             lo = (box.center[1] - box.Lx/2, box.center[2] - box.Ly/2, box.center[3] - box.Lz/2)
             hi = (box.center[1] + box.Lx/2, box.center[2] + box.Ly/2, box.center[3] + box.Lz/2)
-            if lo[1] <= pos[1] <= hi[1] && lo[2] <= pos[2] <= hi[2] && lo[3] <= pos[3] <= hi[3]
+            if _point_in_box(pos, lo, hi, box_tol)
                 eps_local = si.epses[b]; break
             end
         end
