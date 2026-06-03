@@ -259,3 +259,34 @@ shared interface (needed by the eventual Step-7 evaluation).
 - Step 7: post-refinement evaluation + contraction to $V_{ijkl}$.
 - Cross-center batching / global low-rank RHS compression.
 - Choosing/forming the neighbor list from real orbital data (assumed provided as input here).
+
+---
+
+## Addendum (2026-06-03, after real `.xsf` inspection)
+
+Inspected real Wannier data in `/mnt/home/xgao1/work/four_index_integral_solver/density_data`
+(graphene 5×5×1, grid `150×150×200` = 4.5M points). Findings drive two revisions:
+
+- **All orbitals share one identical supercell DATAGRID** (same dims/origin/spanning vectors;
+  "shifted" orbitals translate the density on the *same* grid). So `datagrids_compatible` is
+  true and the pointwise-product fast path is exactly what runs — no resampling needed.
+- **`.xsf` PRIMCOORD is the crystal basis (2 C atoms), NOT the Wannier center** — identical for
+  every orbital. So "center from PRIMCOORD" (Step 0 original) cannot distinguish orbitals.
+
+### Revision 1 — orbital center = density centroid (with explicit override)
+Default center is the charge centroid $\langle\mathbf r\rangle = \sum_p \mathbf r_p|\varphi_p|^2/\sum_p|\varphi_p|^2$
+(|φ|² weighting = standard Wannier center). The `.bie` orbital row drops `atom_index` and gains an
+optional explicit center:
+- `id  xsf_path`            → center = centroid (read from the `.xsf` grid)
+- `id  xsf_path  cx cy cz`  → explicit center override
+Assumption: a WF does not wrap the supercell boundary (true for this data; interior-localized).
+Test fixtures use explicit centers for deterministic grouping; a separate unit test verifies the
+centroid computation (`density_centroid`).
+
+### Revision 2 — per-group union-support truncation (+ grid cache)
+The full grid is 4.5M points but $\rho_{ij}$ is non-negligible only in the overlap region. In
+`assemble_rhs_group`, after building the K columns on the shared grid, compute the envelope
+$e_p=\sqrt{\sum_k\rho_{p,k}^2}$ and **keep points where $e_p \ge \texttt{support\_rtol}\cdot\max e$**,
+subselecting positions/weights/all columns by the same index set (shared positions preserved →
+nd-batching intact). Default `support_rtol = 1e-6`. Also: read each orbital's datagrid once per
+group (cache), instead of re-reading the 60 MB file once per pair.
