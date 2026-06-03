@@ -12,17 +12,13 @@ Form the pair density rho_ij = phi_i * phi_j as a VolumeSource by reading both o
 .xsf grids and multiplying pointwise. Requires compatible grids; otherwise resamples
 phi_j onto phi_i's grid via trilinear interpolation.
 """
-function pair_density_source(xsf_i::AbstractString, xsf_j::AbstractString; tol::Real = 0.0)
-    _, dg_i = read_xsf(xsf_i)
-    if xsf_i == xsf_j
-        return VolumeSource(dg_i, dg_i.values .* dg_i.values; tol = tol)
+# Product values phi_i .* phi_j as an (nx,ny,nz) array on phi_i's grid. Compatible grids ->
+# direct pointwise product; otherwise resample phi_j onto phi_i's grid (trilinear, NaN->0).
+function _pair_density_array(dg_i, dg_j)
+    if dg_i === dg_j || datagrids_compatible(dg_i, dg_j)
+        return dg_i.values .* dg_j.values
     end
-    _, dg_j = read_xsf(xsf_j)
-    if datagrids_compatible(dg_i, dg_j)
-        return VolumeSource(dg_i, dg_i.values .* dg_j.values; tol = tol)
-    end
-    # fallback: resample phi_j onto phi_i's grid
-    Minv_j = _datagrid_affine(dg_j)[3]          # inverse cell matrix, computed once
+    Minv_j = _datagrid_affine(dg_j)[3]
     prod = similar(dg_i.values)
     nx, ny, nz = dg_i.nx, dg_i.ny, dg_i.nz
     for ix in 1:nx, iy in 1:ny, iz in 1:nz
@@ -30,7 +26,35 @@ function pair_density_source(xsf_i::AbstractString, xsf_j::AbstractString; tol::
         vj = _datagrid_trilinear_value(dg_j, Minv_j, p)
         prod[ix, iy, iz] = dg_i.values[ix, iy, iz] * (isnan(vj) ? 0.0 : vj)
     end
-    return VolumeSource(dg_i, prod; tol = tol)
+    return prod
+end
+
+# Flatten an (nx,ny,nz) grid array in the SAME order VolumeSource uses (ix outer, iz inner),
+# so a column built this way is consistent with VolumeSource positions/weights.
+function _flatten_grid_array(dg, A::AbstractArray{<:Real,3})
+    nx, ny, nz = dg.nx, dg.ny, dg.nz
+    v = Vector{Float64}(undef, nx * ny * nz)
+    idx = 0
+    @inbounds for ix in 1:nx, iy in 1:ny, iz in 1:nz
+        idx += 1
+        v[idx] = A[ix, iy, iz]
+    end
+    return v
+end
+
+# Read a datagrid once per path, caching it (the .xsf files are ~tens of MB each).
+function _cached_xsf_grid!(cache::AbstractDict, path::AbstractString)
+    haskey(cache, path) && return cache[path]
+    _, dg = read_xsf(path)
+    cache[path] = dg
+    return dg
+end
+
+function pair_density_source(xsf_i::AbstractString, xsf_j::AbstractString; tol::Real = 0.0)
+    _, dg_i = read_xsf(xsf_i)
+    xsf_i == xsf_j && return VolumeSource(dg_i, dg_i.values .* dg_i.values; tol = tol)
+    _, dg_j = read_xsf(xsf_j)
+    return VolumeSource(dg_i, _pair_density_array(dg_i, dg_j); tol = tol)
 end
 
 """
@@ -53,26 +77,43 @@ end
 
 num_pairs(g::RHSGroup) = length(g.neighbor_ids)
 
-function assemble_rhs_group(si::SystemInput, center_id::Int; tol::Real = 0.0)
+"""
+    assemble_rhs_group(si, center_id; support_rtol=1e-6, grid_cache=Dict{String,Any}())
+
+Assemble one center's batch of pair densities `rho_{i,j}` (j in the resolved group) on phi_i's
+grid, as an `RHSGroup`. Each orbital's datagrid is read at most once (cached in `grid_cache`,
+which may be shared across calls). The group is then truncated to its **union support**: points
+where the envelope `sqrt(sum_k rho_k^2)` is below `support_rtol * max` are dropped, with the
+SAME index set applied to every column so all densities stay on shared grid points (required
+for nd-batched FMM). Pass `support_rtol = 0` to keep the full grid.
+"""
+function assemble_rhs_group(si::SystemInput, center_id::Int;
+        support_rtol::Real = 1e-6, grid_cache::AbstractDict = Dict{String, Any}())
     haskey(si.groups, center_id) || error("no group for center $center_id")
     js = si.groups[center_id]
-    orb_i = si.orbitals[center_id]
-    # build each rho_ij on phi_i's grid (positions identical across the group)
-    first_vs = pair_density_source(orb_i.xsf_path, si.orbitals[js[1]].xsf_path; tol = tol)
-    n = length(first_vs.density)
+    isempty(js) && error("group $center_id is empty")
     K = length(js)
-    positions = copy(first_vs.positions)
-    weights = copy(first_vs.weights)
+    dg_i = _cached_xsf_grid!(grid_cache, si.orbitals[center_id].xsf_path)
+
+    # column 1 also gives the shared positions/weights (full grid, canonical ordering)
+    base = VolumeSource(dg_i, _pair_density_array(dg_i, _cached_xsf_grid!(grid_cache, si.orbitals[js[1]].xsf_path)))
+    n = length(base.density)
     densities = Matrix{Float64}(undef, n, K)
-    densities[:, 1] .= first_vs.density
+    densities[:, 1] .= base.density
     for k in 2:K
-        vs = pair_density_source(orb_i.xsf_path, si.orbitals[js[k]].xsf_path; tol = tol)
-        length(vs.density) == n ||
-            error("group $center_id: pair $(js[k]) has $(length(vs.density)) pts, expected $n " *
-                  "(grids must match across the group for nd-batching)")
-        densities[:, k] .= vs.density
+        dg_j = _cached_xsf_grid!(grid_cache, si.orbitals[js[k]].xsf_path)
+        densities[:, k] .= _flatten_grid_array(dg_i, _pair_density_array(dg_i, dg_j))
     end
-    return RHSGroup(center_id, copy(js), positions, weights, densities)
+
+    # union-support truncation: keep points where the group envelope is non-negligible
+    keep = if support_rtol > 0
+        env = vec(sqrt.(sum(abs2, densities; dims = 2)))
+        m = maximum(env)
+        m > 0 ? findall(>=(support_rtol * m), env) : collect(1:n)
+    else
+        collect(1:n)
+    end
+    return RHSGroup(center_id, copy(js), base.positions[:, keep], base.weights[keep], densities[keep, :])
 end
 
 """
@@ -366,10 +407,10 @@ layer densities Σ (N x K). Stops at Σ (evaluation/contraction are out of scope
 function solve_dielectric_box3d_group(bie_path::AbstractString, center_id::Int;
         n_quad::Int, rhs_atol::Float64, l_ec::Float64,
         fmm_tol::Float64 = 1e-9, up_tol::Float64 = 1e-9, max_order::Int = 8,
-        rtol::Float64 = 1e-10, itmax::Int = 500, tol::Real = 0.0,
+        rtol::Float64 = 1e-10, itmax::Int = 500, support_rtol::Real = 1e-6,
         max_depth::Int = 128)
     si = read_system_input(bie_path)
-    group = assemble_rhs_group(si, center_id; tol = tol)
+    group = assemble_rhs_group(si, center_id; support_rtol = support_rtol)
     isempty(group.neighbor_ids) &&
         return (; sigma = zeros(0, 0), interface = nothing, group = group, stats = nothing)
     interface = build_group_interface(si, group;

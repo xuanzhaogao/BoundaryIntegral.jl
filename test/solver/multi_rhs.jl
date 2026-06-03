@@ -107,4 +107,39 @@ using Krylov
         @test size(out.sigma, 1) == BoundaryIntegral.num_points(out.interface)
         @test all(isfinite, out.sigma)
     end
+
+    @testset "K=2 batched solve matches per-column" begin
+        fixdir = joinpath(@__DIR__, "..", "fixtures")
+        si = read_system_input(joinpath(fixdir, "system_pair.bie"))
+        g = assemble_rhs_group(si, 1)
+        @test num_pairs(g) == 2
+
+        interface = build_group_interface(si, g; n_quad = 6, rhs_atol = 1e-3, l_ec = 0.25)
+        op = batched_lhs_dielectric_box3d_fmm3d_corrected(interface, 1e-9, 1e-9, 8)
+        F = rhs_dielectric_box3d_fmm3d_batched(interface, si, g, 1e-9)
+        @test size(F, 2) == 2
+
+        Σ, _ = BoundaryIntegral._block_gmres_solve(op, F; rtol = 1e-10, itmax = 300)
+        for c in 1:2
+            xc, _ = Krylov.gmres(op, F[:, c]; rtol = 1e-10, itmax = 300)
+            @test maximum(abs.(Σ[:, c] .- xc)) < 1e-6
+        end
+    end
+
+    @testset "union-support truncation + grid cache" begin
+        fixdir = joinpath(@__DIR__, "..", "fixtures")
+        si = read_system_input(joinpath(fixdir, "system_spike.bie"))
+        # orb_spike is a 3x3x3 grid with a single nonzero point -> rho_11 spikes at one node
+        g_full  = assemble_rhs_group(si, 1; support_rtol = 0.0)
+        g_trunc = assemble_rhs_group(si, 1; support_rtol = 1e-3)
+        @test size(g_full.positions, 2) == 27          # full grid kept
+        @test size(g_trunc.positions, 2) == 1          # only the spike survives
+        @test size(g_trunc.positions, 2) == size(g_trunc.densities, 1)  # mask shared across cols
+        @test g_trunc.densities[1, 1] ≈ 1.0
+
+        # grid cache is populated and reused (orbital read once)
+        cache = Dict{String, Any}()
+        assemble_rhs_group(si, 1; grid_cache = cache)
+        @test haskey(cache, si.orbitals[1].xsf_path)
+    end
 end
