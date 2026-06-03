@@ -59,7 +59,8 @@ function read_system_input(path::AbstractString)
                 end
                 i += 1
             end
-            i += 1
+            i <= length(lines) || error("unexpected EOF inside BEGIN_DIELECTRICS")
+            i += 1  # skip END_DIELECTRICS
         elseif s == "BEGIN_ORBITALS"
             i += 1
             while i <= length(lines) && lines[i] != "END_ORBITALS"
@@ -72,7 +73,8 @@ function read_system_input(path::AbstractString)
                 push!(orb_rows, (id, xsf, atom_idx))
                 i += 1
             end
-            i += 1
+            i <= length(lines) || error("unexpected EOF inside BEGIN_ORBITALS")
+            i += 1  # skip END_ORBITALS
         elseif s == "BEGIN_GROUPING"
             i += 1
             while i <= length(lines) && lines[i] != "END_GROUPING"
@@ -81,7 +83,7 @@ function read_system_input(path::AbstractString)
                 if startswith(row, "CUTOFF")
                     cutoff = parse(Float64, split(row)[2])
                 elseif occursin(':', row)
-                    lhs, rhs = split(row, ':')
+                    lhs, rhs = split(row, ':'; limit = 2)
                     ci = parse(Int, strip(lhs))
                     overrides[ci] = parse.(Int, split(strip(rhs)))
                 else
@@ -89,7 +91,8 @@ function read_system_input(path::AbstractString)
                 end
                 i += 1
             end
-            i += 1
+            i <= length(lines) || error("unexpected EOF inside BEGIN_GROUPING")
+            i += 1  # skip END_GROUPING
         else
             error("Unrecognized top-level line: $s")
         end
@@ -126,6 +129,7 @@ function read_system_input(path::AbstractString)
         groups[i_id] = neigh
     end
     for (ci, lst) in overrides
+        haskey(orbitals, ci) || error("GROUPING override references unknown orbital id $ci")
         groups[ci] = copy(lst)
     end
 
