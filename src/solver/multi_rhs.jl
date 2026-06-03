@@ -430,8 +430,9 @@ end
     solve_dielectric_box3d_group(bie_path, center_id; ...)
 
 High-level Steps 0–6 (all solver knobs from the `.bie` `BEGIN_SOLVE` block / `si.solve`):
-assemble the center group's pair densities, build ONE shared interface refined per-source in
-the real `.xsf` coordinate frame, and block-GMRES solve for the layer densities Σ (N×K).
+assemble the center group's pair densities, build ONE shared interface refined on the group
+envelope (rss of the K densities — one FMM/depth, not K) in the real `.xsf` coordinate frame,
+and block-GMRES solve for the layer densities Σ (N×K).
 Returns `(; sigma, interface, sources, group, stats, labels)`. Uses the `Vector{VolumeSource}`
 core throughout.
 """
@@ -444,8 +445,11 @@ function solve_dielectric_box3d_group(si::SystemInput, center_id::Int;
         sources = VolumeSource{Float64, 3}[], group = group, stats = nothing, labels = labels)
     sp = si.solve
     sources = group_volume_sources(group)
-    interface = multi_dielectric_box3d_rhs_adaptive(
-        sp.n_quad, resolved_l_ec(si), si.boxes, si.epses, sources, sp.rhs_tol;
+    # Refine on a single ENVELOPE source (rss of the K densities) — one FMM/TKM evaluation per
+    # depth instead of K. The envelope is significant wherever any source is, so it resolves the
+    # combined features; the per-source vector method costs K× more and matters little here.
+    interface = build_group_interface(si, group;
+        n_quad = sp.n_quad, rhs_atol = sp.rhs_tol, l_ec = resolved_l_ec(si),
         eps_out = si.eps_out, max_depth = sp.max_depth)
     Σ, stats = solve_dielectric_box3d_block(interface, sources;
         fmm_tol = sp.lhs_tol, up_tol = sp.lhs_tol, max_order = sp.max_order, rtol = sp.gmres_rtol)
