@@ -15,4 +15,16 @@ using Test
         # integrates identically to a single-orbital density
         @test sum(vs.weights) ≈ sum(BoundaryIntegral.VolumeSource(dg).weights)
     end
+
+    @testset "assemble_rhs_group" begin
+        fixdir = joinpath(@__DIR__, "..", "fixtures")
+        si = read_system_input(joinpath(fixdir, "system_small.bie"))
+        # center 1 groups only with itself under cutoff 3.0
+        g = assemble_rhs_group(si, 1)
+        @test g.center_id == 1
+        @test g.neighbor_ids == [1]
+        @test size(g.densities, 2) == 1           # K = 1
+        @test size(g.positions, 2) == size(g.densities, 1)
+        @test all(g.densities[:, 1] .≈ 1.0)        # rho_11 = 1
+    end
 end
