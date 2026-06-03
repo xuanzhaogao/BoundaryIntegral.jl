@@ -58,6 +58,7 @@ export read_system_input, SystemInput, OrbitalEntry
 # multi-rhs solver
 export pair_density_source, RHSGroup, assemble_rhs_group, build_group_interface
 export batched_lhs_dielectric_box3d_fmm3d_corrected, BatchedDielectricOperator
+export solve_dielectric_box3d_group
 
 # visualization
 export viz_2d, viz_3d

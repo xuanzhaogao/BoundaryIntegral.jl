@@ -267,3 +267,34 @@ Base.:*(op::BatchedDielectricOperator, X::AbstractMatrix) =
     mul!(Matrix{Float64}(undef, op.n, size(X, 2)), op, X)
 Base.:*(op::BatchedDielectricOperator, x::AbstractVector) =
     mul!(Vector{Float64}(undef, op.n), op, x)
+
+# thin wrapper so tests can call block_gmres directly on the operator
+function _block_gmres_solve(op::BatchedDielectricOperator, F::AbstractMatrix;
+        rtol::Float64 = 1e-10, atol::Float64 = 0.0, itmax::Int = 500)
+    Σ, stats = Krylov.block_gmres(op, Matrix{Float64}(F); rtol = rtol, atol = atol, itmax = itmax)
+    return Σ, stats
+end
+
+"""
+    solve_dielectric_box3d_group(bie_path, center_id; kw...) -> (; sigma, interface, group, stats)
+
+Step 0 + Steps 1-6: parse the .bie file, assemble the center group, build the shared
+union/envelope-refined interface, assemble the batched RHS, and block-GMRES solve for the
+layer densities Σ (N x K). Stops at Σ (evaluation/contraction are out of scope).
+"""
+function solve_dielectric_box3d_group(bie_path::AbstractString, center_id::Int;
+        n_quad::Int, rhs_atol::Float64, l_ec::Float64,
+        fmm_tol::Float64 = 1e-9, up_tol::Float64 = 1e-9, max_order::Int = 8,
+        rtol::Float64 = 1e-10, itmax::Int = 500, tol::Real = 0.0,
+        max_depth::Int = 128)
+    si = read_system_input(bie_path)
+    group = assemble_rhs_group(si, center_id; tol = tol)
+    isempty(group.neighbor_ids) &&
+        return (; sigma = zeros(0, 0), interface = nothing, group = group, stats = nothing)
+    interface = build_group_interface(si, group;
+        n_quad = n_quad, rhs_atol = rhs_atol, l_ec = l_ec, max_depth = max_depth)
+    op = batched_lhs_dielectric_box3d_fmm3d_corrected(interface, fmm_tol, up_tol, max_order)
+    F = rhs_dielectric_box3d_fmm3d_batched(interface, si, group, fmm_tol)
+    Σ, stats = _block_gmres_solve(op, F; rtol = rtol, itmax = itmax)
+    return (; sigma = Σ, interface = interface, group = group, stats = stats)
+end

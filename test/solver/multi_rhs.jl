@@ -1,5 +1,6 @@
 using BoundaryIntegral
 using Test
+using Krylov
 
 @testset "multi_rhs" begin
     fixdir = joinpath(@__DIR__, "..", "fixtures")
@@ -77,5 +78,33 @@ using Test
         for c in 1:size(X, 2)
             @test maximum(abs.(Y[:, c] .- ref * X[:, c])) < 1e-8
         end
+    end
+
+    @testset "block solve == looped single solves (Unit 6)" begin
+        fixdir = joinpath(@__DIR__, "..", "fixtures")
+        si = read_system_input(joinpath(fixdir, "system_small.bie"))
+        g = assemble_rhs_group(si, 1)
+        interface = build_group_interface(si, g; n_quad = 6, rhs_atol = 1e-3, l_ec = 0.25)
+        op = batched_lhs_dielectric_box3d_fmm3d_corrected(interface, 1e-9, 1e-9, 8)
+        F = rhs_dielectric_box3d_fmm3d_batched(interface, si, g, 1e-9)
+
+        Σ, stats = BoundaryIntegral._block_gmres_solve(op, F; rtol = 1e-10, itmax = 200)
+        @test size(Σ) == size(F)
+
+        for c in 1:size(F, 2)
+            xc, _ = Krylov.gmres(op, F[:, c]; rtol = 1e-10, itmax = 200)
+            @test maximum(abs.(Σ[:, c] .- xc)) < 1e-6
+        end
+    end
+
+    @testset "end-to-end .bie -> Sigma" begin
+        fixdir = joinpath(@__DIR__, "..", "fixtures")
+        out = solve_dielectric_box3d_group(
+            joinpath(fixdir, "system_small.bie"), 1;
+            n_quad = 6, rhs_atol = 1e-3, l_ec = 0.25,
+            fmm_tol = 1e-9, up_tol = 1e-9, max_order = 8, rtol = 1e-10)
+        @test size(out.sigma, 2) == 1
+        @test size(out.sigma, 1) == BoundaryIntegral.num_points(out.interface)
+        @test all(isfinite, out.sigma)
     end
 end
