@@ -90,12 +90,11 @@ end
 
 Assemble one center's batch of pair densities `rho_{i,j}` (j in the resolved group) on phi_i's
 grid, as an `RHSGroup`. Each orbital's datagrid is read at most once (cached in `grid_cache`,
-which may be shared across calls). The group is then truncated to its **union support**: a point
-is kept if it is significant for ANY source RELATIVE TO THAT SOURCE'S OWN max
-(`|rho_k(p)| >= support_rtol * max_p|rho_k|`). The per-source-relative test (rather than a single
-global threshold) keeps the support of small off-site densities `rho_{i,j+R}`, which can be
-orders of magnitude smaller than the on-site density. The same kept-index set is applied to every
-column so all densities stay on shared grid points (required for nd-batched FMM). Pass
+which may be shared across calls). The group is then truncated to its **union support**: points
+where the envelope `sqrt(sum_k rho_k^2)` is below `support_rtol * (global max)` are dropped, the
+SAME index set applied to every column so all densities stay on shared grid points (required for
+nd-batched FMM). The threshold is relative to the GLOBAL envelope max, so significant pairs keep
+their support while weakly-overlapping far pairs (tiny everywhere) keep few points. Pass
 `support_rtol = 0` to keep the full grid.
 """
 function assemble_rhs_group(si::SystemInput, center_id::Int;
@@ -116,21 +115,15 @@ function assemble_rhs_group(si::SystemInput, center_id::Int;
         densities[:, k] .= _flatten_grid_array(dg_i, _pair_density_array(dg_i, dg_j))
     end
 
-    # union-support truncation: keep a point if it is significant for ANY source relative to
-    # that source's OWN max (so small off-site densities keep their support, not just the
-    # largest on-site one).
+    # union-support truncation: keep points where the group envelope sqrt(sum_k rho_k^2) is
+    # >= support_rtol * its global max. Relative to the GLOBAL max (not per-source): this keeps
+    # the support of significant pairs (on-site, nearby off-site) while keeping few points for
+    # weakly-overlapping far pairs (whose density is tiny everywhere) — a per-source-relative
+    # threshold would instead keep ~the whole grid for such weak pairs (noise-floor support).
     keep = if support_rtol > 0
-        mask = falses(n)
-        @inbounds for k in 1:K
-            col = @view densities[:, k]
-            mk = maximum(abs, col)
-            mk == 0 && continue
-            thr = support_rtol * mk
-            for p in 1:n
-                abs(col[p]) >= thr && (mask[p] = true)
-            end
-        end
-        findall(mask)
+        env = vec(sqrt.(sum(abs2, densities; dims = 2)))
+        m = maximum(env)
+        m > 0 ? findall(>=(support_rtol * m), env) : collect(1:n)
     else
         collect(1:n)
     end
