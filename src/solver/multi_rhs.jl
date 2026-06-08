@@ -297,17 +297,27 @@ function LinearAlgebra.mul!(Y::AbstractMatrix, op::BatchedDielectricOperator, X:
     n = op.n; K = size(X, 2)
     size(X, 1) == n || throw(DimensionMismatch())
     charges = Matrix{Float64}(undef, K, n)
-    @inbounds for k in 1:K, i in 1:n
-        charges[k, i] = op.weights[i] * X[i, k]
+    # glue loops are threaded over i (n nodes >> K); each i touches disjoint columns/rows.
+    # Needs Julia started with threads (julia -t N / JULIA_NUM_THREADS), independent of OMP.
+    Threads.@threads for i in 1:n
+        @inbounds begin
+            wi = op.weights[i]
+            for k in 1:K
+                charges[k, i] = wi * X[i, k]
+            end
+        end
     end
     vals = lfmm3d(op.thresh, op.sources, charges = charges, pg = 2, nd = K)
     grad = reshape(vals.grad, K, 3, n)    # (K, 3, n); handles nd==1 singleton drop
     C = op.corrections * X                # n x K (sparse mat-mat)
-    @inbounds for k in 1:K, i in 1:n
-        gn = op.norms[1, i] * grad[k, 1, i] +
-             op.norms[2, i] * grad[k, 2, i] +
-             op.norms[3, i] * grad[k, 3, i]
-        Y[i, k] = -gn / (4π) + C[i, k] + op.diag[i] * X[i, k]
+    Threads.@threads for i in 1:n
+        @inbounds begin
+            n1 = op.norms[1, i]; n2 = op.norms[2, i]; n3 = op.norms[3, i]; di = op.diag[i]
+            for k in 1:K
+                gn = n1 * grad[k, 1, i] + n2 * grad[k, 2, i] + n3 * grad[k, 3, i]
+                Y[i, k] = -gn / (4π) + C[i, k] + di * X[i, k]
+            end
+        end
     end
     return Y
 end
