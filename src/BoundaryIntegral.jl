@@ -62,6 +62,9 @@ export batched_lhs_dielectric_box3d_fmm3d_corrected, BatchedDielectricOperator
 export solve_dielectric_box3d_group, solve_dielectric_box3d_block
 export four_index_matrix, four_index_integrals, group_volume_sources
 
+# lattice batch
+export lattice_grid_steps, OrbitalInstance
+
 # visualization
 export viz_2d, viz_3d
 export viz_3d_surface
@@ -103,6 +106,7 @@ include("utils/system_input.jl")
 include("solver/dielectric_box2d.jl")
 include("solver/dielectric_box3d.jl")
 include("solver/multi_rhs.jl")
+include("solver/lattice_batch.jl")
 
 # # visualization
 include("visualization/viz_2d.jl")

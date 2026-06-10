@@ -41,6 +41,7 @@ using Test
     # multi-rhs solver
     include("solver/multi_rhs.jl")
     include("solver/multi_rhs_vector.jl")
+    include("solver/lattice_batch.jl")
 
     # solver functions
     if run_full
