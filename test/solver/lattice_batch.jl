@@ -78,4 +78,29 @@ using Test
         @test gx2 == gx1 .+ 2          # pair (2,2) is pair (1,1) translated by s1=(2,0,0)
         @test length(b0.gidx) > count(!iszero, b0.densities[:, 1])   # union grew
     end
+
+    @testset "solve_dielectric_lattice_batch == group solve" begin
+        si = read_system_input(joinpath(fixdir, "system_smooth_lat.bie"))
+        NQ, RTOLR, LEC = 4, 1e-2, 2.0
+        sol_ref = (let g = assemble_rhs_group(si, 1; support_rtol = 1e-6)
+            iface = build_group_interface(si, g; n_quad = NQ, rhs_atol = RTOLR, l_ec = LEC)
+            Σ, _ = solve_dielectric_box3d_block(iface, group_volume_sources(g);
+                fmm_tol = 1e-6, up_tol = 1e-6, max_order = 8, rtol = 1e-8)
+            (Σ, iface)
+        end)
+
+        st, dg = BoundaryIntegral.read_xsf(joinpath(fixdir, "orb_smooth.xsf"))
+        insts = Dict(1 => OrbitalInstance(1, 1, (0, 0, 0)),
+                     2 => OrbitalInstance(2, 1, lattice_grid_steps(dg, st.primvec, (1, 0, 0))))
+        b = assemble_lattice_batch([dg], insts, [(1, 1), (1, 2)]; support_rtol = 1e-6)
+        res = solve_dielectric_lattice_batch(si.boxes, si.epses, si.eps_out, b;
+            n_quad = NQ, rhs_atol = RTOLR, l_ec = LEC,
+            fmm_tol = 1e-6, up_tol = 1e-6, max_order = 8, gmres_rtol = 1e-8)
+
+        @test size(res.sigma, 2) == 2
+        @test BoundaryIntegral.num_points(res.interface) == BoundaryIntegral.num_points(sol_ref[2])
+        # same interface refinement (same envelope up to row order) => directly comparable Σ
+        @test maximum(abs.(res.sigma .- sol_ref[1])) < 1e-6
+        @test res.stats.niter > 0
+    end
 end

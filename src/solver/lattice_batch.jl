@@ -133,3 +133,52 @@ function assemble_lattice_batch(templates::AbstractVector,
     w = abs(det(hcat(collect(At), collect(Bt), collect(Ct)))) / (nx * ny * nz)
     return LatticeBatch(copy(pairs), gk, positions, fill(w, m), dk)
 end
+
+"""
+    envelope_volume_source(b::LatticeBatch)
+
+Per-point rss of the batch densities, as a VolumeSource (drives envelope refinement).
+"""
+function envelope_volume_source(b::LatticeBatch)
+    n = size(b.densities, 1)
+    env = Vector{Float64}(undef, n)
+    @inbounds for s in 1:n
+        acc = 0.0
+        for k in 1:size(b.densities, 2)
+            acc += b.densities[s, k]^2
+        end
+        env[s] = sqrt(acc)
+    end
+    return VolumeSource(copy(b.positions), copy(b.weights), env)
+end
+
+"Split a LatticeBatch into the Vector{VolumeSource} core form (shared positions)."
+function batch_volume_sources(b::LatticeBatch)
+    return VolumeSource{Float64, 3}[
+        VolumeSource(copy(b.positions), copy(b.weights), b.densities[:, k])
+        for k in 1:num_pairs(b)
+    ]
+end
+
+"""
+    solve_dielectric_lattice_batch(boxes, epses, eps_out, b::LatticeBatch; kw...)
+        -> (; sigma, interface, sources, stats)
+
+Steps 0–6 for an explicit-pair batch: ONE shared interface refined on the batch
+envelope, then block GMRES. Mirrors `solve_dielectric_box3d_group` without SystemInput.
+"""
+function solve_dielectric_lattice_batch(boxes::Vector{BoxGeom}, epses::Vector{Float64},
+        eps_out::Float64, b::LatticeBatch;
+        n_quad::Int, rhs_atol::Float64, l_ec::Float64,
+        fmm_tol::Float64, up_tol::Float64 = fmm_tol, max_order::Int = 8,
+        gmres_rtol::Float64, max_depth::Int = 128, itmax::Int = 500)
+    env = envelope_volume_source(b)
+    interface = multi_dielectric_box3d_rhs_adaptive(
+        n_quad, l_ec, boxes, epses, env, rhs_atol;
+        eps_out = eps_out, max_depth = max_depth)
+    sources = batch_volume_sources(b)
+    Σ, stats = solve_dielectric_box3d_block(interface, sources;
+        fmm_tol = fmm_tol, up_tol = up_tol, max_order = max_order,
+        rtol = gmres_rtol, itmax = itmax)
+    return (; sigma = Σ, interface = interface, sources = sources, stats = stats)
+end
