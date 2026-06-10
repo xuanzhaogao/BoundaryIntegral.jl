@@ -152,7 +152,11 @@ function envelope_volume_source(b::LatticeBatch)
     return VolumeSource(copy(b.positions), copy(b.weights), env)
 end
 
-"Split a LatticeBatch into the Vector{VolumeSource} core form (shared positions)."
+"""
+    batch_volume_sources(b::LatticeBatch) -> Vector{VolumeSource{Float64,3}}
+
+Split a LatticeBatch into the Vector{VolumeSource} core form (shared positions).
+"""
 function batch_volume_sources(b::LatticeBatch)
     return VolumeSource{Float64, 3}[
         VolumeSource(copy(b.positions), copy(b.weights), b.densities[:, k])
