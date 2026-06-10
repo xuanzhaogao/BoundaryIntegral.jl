@@ -37,3 +37,99 @@ function _frame_overlap(n::Int, si::Int, sj::Int)
     glo > ghi && return nothing
     return glo:ghi
 end
+
+"""
+    LatticeBatch
+
+A batch of pair densities on the union of their supports, indexed on the VIRTUAL GLOBAL
+GRID (`gidx` = integer grid coordinates in the template frame). All columns share
+`gidx`/`positions`/`weights` — required for the nd-batched FMM.
+"""
+struct LatticeBatch
+    pair_ids::Vector{Tuple{Int,Int}}     # (orbital id i, orbital id j) per column
+    gidx::Vector{NTuple{3,Int}}          # n shared global grid indices (sorted)
+    positions::Matrix{Float64}           # 3 × n
+    weights::Vector{Float64}             # n (uniform: |det cell| / (nx ny nz))
+    densities::Matrix{Float64}           # n × K raw (unscreened) pair densities
+end
+
+num_pairs(b::LatticeBatch) = length(b.pair_ids)
+
+"""
+    assemble_lattice_batch(templates, instances, pairs; support_rtol=1e-6) -> LatticeBatch
+
+Assemble the pair densities `rho_ij = phi_i * phi_j` for an explicit pair list. Each
+orbital is `templates[instance.template_id]` translated by `instance.steps`; products
+are exact pointwise multiplies on the integer frame intersection. The batch lives on
+the union of the per-pair supports, then truncated by the group envelope
+(rss across columns ≥ `support_rtol` × its max — same rule as `assemble_rhs_group`).
+All templates must share one grid geometry.
+"""
+function assemble_lattice_batch(templates::AbstractVector,
+        instances::AbstractDict{Int,OrbitalInstance},
+        pairs::Vector{Tuple{Int,Int}}; support_rtol::Real = 1e-6)
+    isempty(pairs) && error("empty batch")
+    t1 = templates[1]
+    for t in templates
+        datagrids_compatible(t1, t) || error("all templates must share one grid geometry")
+    end
+    nx, ny, nz = t1.nx, t1.ny, t1.nz
+    K = length(pairs)
+
+    row = Dict{NTuple{3,Int},Int}()
+    gidx = NTuple{3,Int}[]
+    cols = Vector{Vector{Tuple{Int,Float64}}}(undef, K)
+    for (k, (i, j)) in enumerate(pairs)
+        oi = instances[i]; oj = instances[j]
+        vi = templates[oi.template_id].values
+        vj = templates[oj.template_id].values
+        si = oi.steps; sj = oj.steps
+        rx = _frame_overlap(nx, si[1], sj[1])
+        ry = _frame_overlap(ny, si[2], sj[2])
+        rz = _frame_overlap(nz, si[3], sj[3])
+        vals = Tuple{Int,Float64}[]
+        if rx !== nothing && ry !== nothing && rz !== nothing
+            for gz in rz, gy in ry, gx in rx          # gx innermost: values are i-fastest
+                v = vi[gx - si[1], gy - si[2], gz - si[3]] *
+                    vj[gx - sj[1], gy - sj[2], gz - sj[3]]
+                v == 0.0 && continue
+                g = (gx, gy, gz)
+                r = get!(row, g) do
+                    push!(gidx, g)
+                    length(gidx)
+                end
+                push!(vals, (r, v))
+            end
+        end
+        cols[k] = vals
+    end
+
+    n = length(gidx)
+    densities = zeros(Float64, n, K)
+    for k in 1:K, (r, v) in cols[k]
+        densities[r, k] = v
+    end
+
+    # union-support truncation (same rule as assemble_rhs_group)
+    keep = if support_rtol > 0 && n > 0
+        env = vec(sqrt.(sum(abs2, densities; dims = 2)))
+        m = maximum(env)
+        m > 0 ? findall(>=(support_rtol * m), env) : collect(1:n)
+    else
+        collect(1:n)
+    end
+    gk = gidx[keep]
+    perm = sortperm(gk)                                # deterministic order
+    gk = gk[perm]
+    dk = densities[keep, :][perm, :]
+
+    m = length(gk)
+    positions = Matrix{Float64}(undef, 3, m)
+    for s in 1:m
+        p = grid_point(t1, gk[s][1], gk[s][2], gk[s][3])   # affine: valid for any ints
+        positions[1, s] = p[1]; positions[2, s] = p[2]; positions[3, s] = p[3]
+    end
+    At, Bt, Ct = true_cell_vectors(t1)
+    w = abs(det(hcat(collect(At), collect(Bt), collect(Ct)))) / (nx * ny * nz)
+    return LatticeBatch(copy(pairs), gk, positions, fill(w, m), dk)
+end
