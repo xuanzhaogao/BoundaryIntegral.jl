@@ -181,6 +181,11 @@ Total potential `Φ_a = u_inc[ρ_a] + u[σ_a]` of a solved batch at arbitrary ta
   (more accurate than TKM when the density is marginally resolved) since the far
   field depends only on low moments. `far_pad` ≳ 2 grid steps.
 
+`far_pad` is an ABSOLUTE length in position units (supply ≈ 2 grid steps, e.g.
+`2 * max(|At|/nx, |Bt|/ny, |Ct|/nz)`).
+
+All `sources` must share identical grid points (the batch convention); this is checked.
+
 Conventions match `four_index_matrix`: TKM returns the `1/(4π|r|)`-normalised potential
 and is used without further scaling; the scattered layer potential is the output of
 `laplace3d_pottrg_fmm3d_corrected_hcubature` applied to each column of Σ.
@@ -194,6 +199,15 @@ function evaluate_batch_potential(interface, Σ::AbstractMatrix,
     size(targets, 1) == 3 || throw(ArgumentError("targets must be 3 × n"))
     size(Σ, 2) == K || throw(DimensionMismatch("Σ columns ≠ number of sources"))
 
+    # shared-positions contract: all sources must be on the same grid points
+    for s in 2:K
+        sources[s].positions == sources[1].positions ||
+            throw(ArgumentError("evaluate_batch_potential requires all sources on identical grid points"))
+    end
+
+    # hoist screening: one pass over all sources
+    screened = [screened_volume_source(interface, vs, SharpScreening()) for vs in sources]
+
     Φ = Matrix{Float64}(undef, nt, K)
 
     # scattered part: build the corrected map once, apply per column
@@ -202,8 +216,8 @@ function evaluate_batch_potential(interface, Σ::AbstractMatrix,
         Φ[:, a] = pottrg * Σ[:, a]
     end
 
-    # incident part: near/far split on the shared support bounding box (sources[1].positions)
-    src_pos = sources[1].positions
+    # incident part: near/far split on the shared support bounding box (screened[1].positions)
+    src_pos = screened[1].positions
     src_lo = minimum(src_pos; dims = 2)
     src_hi = maximum(src_pos; dims = 2)
     near_idx = findall(i -> (targets[1, i] >= src_lo[1] - far_pad &&
@@ -218,7 +232,7 @@ function evaluate_batch_potential(interface, Σ::AbstractMatrix,
     if !isempty(near_idx)
         near_targets = targets[:, near_idx]
         for a in 1:K
-            sa = screened_volume_source(interface, sources[a], SharpScreening())
+            sa = screened[a]
             vals = TKM3D.ltkm3dc(volume_tol, sa.positions;
                 charges = sa.weights .* sa.density, targets = near_targets, pgt = 1,
                 kmax = _estimate_tkm3dc_kmax(sa))
@@ -231,11 +245,11 @@ function evaluate_batch_potential(interface, Σ::AbstractMatrix,
     if !isempty(far_idx)
         far_targets = targets[:, far_idx]
         # screened sources share positions; build nd=K charge matrix
-        sa1 = screened_volume_source(interface, sources[1], SharpScreening())
+        sa1 = screened[1]
         n_src = length(sa1.weights)
         charges = Matrix{Float64}(undef, K, n_src)
         for a in 1:K
-            sa = screened_volume_source(interface, sources[a], SharpScreening())
+            sa = screened[a]
             @inbounds for s in 1:n_src
                 charges[a, s] = sa.weights[s] * sa.density[s]
             end

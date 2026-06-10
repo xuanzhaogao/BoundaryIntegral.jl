@@ -173,6 +173,36 @@ using LinearAlgebra
         max_rel_diff = maximum(abs.(Φ[:, 1] .- Φ_ref)) / scale
         @info "near/far split consistency: max_rel_diff = $max_rel_diff"
         @test max_rel_diff < 1e-5
+
+        # K = 2 with a genuine near/far split (nd = 2 far reshape path)
+        den2 = den .* (pts[1, :] .- 1.5).^2                    # second, distinct density
+        vs_res2 = VolumeSource(copy(pts), fill(h^3, nres^3), den2)
+        Σ0_2 = zeros(BoundaryIntegral.num_points(res_e.interface), 2)
+        Φ2 = evaluate_batch_potential(res_e.interface, Σ0_2, [vs_res, vs_res2], targets;
+            lhs_tol = 1e-6, volume_tol = 1e-8, far_pad = far_pad)
+        for (a, v) in enumerate((vs_res, vs_res2))
+            sa2 = BoundaryIntegral.screened_volume_source(res_e.interface, v,
+                BoundaryIntegral.SharpScreening())
+            vals2 = BoundaryIntegral.TKM3D.ltkm3dc(1e-8, sa2.positions;
+                charges = sa2.weights .* sa2.density, targets = targets, pgt = 1,
+                kmax = BoundaryIntegral._estimate_tkm3dc_kmax(sa2))
+            @test vals2.ier == 0
+            ref = real.(vals2.pottarg)
+            max_rel_diff2 = maximum(abs.(Φ2[:, a] .- ref)) / maximum(abs.(ref))
+            @info "K=2 near/far split, column $a: max_rel_diff = $max_rel_diff2"
+            @test maximum(abs.(Φ2[:, a] .- ref)) < 1e-5 * maximum(abs.(ref))
+        end
+
+        # all-far branch: only the distant ring as targets
+        Φf = evaluate_batch_potential(res_e.interface, Σ0_2, [vs_res, vs_res2], far;
+            lhs_tol = 1e-6, volume_tol = 1e-8, far_pad = far_pad)
+        @test size(Φf) == (size(far, 2), 2)
+        @test all(isfinite, Φf)
+
+        # mismatched source positions are rejected
+        vs_bad = VolumeSource(pts .+ 0.1, fill(h^3, nres^3), den2)
+        @test_throws ArgumentError evaluate_batch_potential(res_e.interface, Σ0_2,
+            [vs_res, vs_bad], far; lhs_tol = 1e-6, volume_tol = 1e-8, far_pad = far_pad)
     end
 
     @testset "V via evaluate_batch_potential == four_index_matrix" begin
