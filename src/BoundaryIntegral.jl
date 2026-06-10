@@ -2,6 +2,7 @@ module BoundaryIntegral
 
 using LinearAlgebra
 using SparseArrays, StaticArrays
+using Serialization
 using FastGaussQuadrature, LegendrePolynomials, SpecialFunctions
 using Krylov, LinearMaps, HCubature
 using NearestNeighbors
@@ -68,6 +69,9 @@ export LatticeBatch, assemble_lattice_batch
 export batch_volume_sources, solve_dielectric_lattice_batch
 export evaluate_batch_potential
 
+# batch IO
+export BatchResult, save_batch_result, load_batch_result, is_complete_batch
+
 # visualization
 export viz_2d, viz_3d
 export viz_3d_surface
@@ -110,6 +114,7 @@ include("solver/dielectric_box2d.jl")
 include("solver/dielectric_box3d.jl")
 include("solver/multi_rhs.jl")
 include("solver/lattice_batch.jl")
+include("solver/batch_io.jl")
 
 # # visualization
 include("visualization/viz_2d.jl")
