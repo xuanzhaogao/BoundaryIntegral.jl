@@ -66,6 +66,7 @@ export four_index_matrix, four_index_integrals, group_volume_sources
 export lattice_grid_steps, OrbitalInstance
 export LatticeBatch, assemble_lattice_batch
 export batch_volume_sources, solve_dielectric_lattice_batch
+export evaluate_batch_potential
 
 # visualization
 export viz_2d, viz_3d

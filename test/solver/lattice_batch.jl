@@ -1,6 +1,7 @@
 # test/solver/lattice_batch.jl
 using BoundaryIntegral
 using Test
+using LinearAlgebra
 
 @testset "lattice_batch" begin
     fixdir = joinpath(@__DIR__, "..", "fixtures")
@@ -102,5 +103,50 @@ using Test
         # same interface refinement (same envelope up to row order) => directly comparable Σ
         @test maximum(abs.(res.sigma .- sol_ref[1])) < 1e-6
         @test res.stats.niter > 0
+    end
+
+    # shared solved batch for evaluation tests (coarse)
+    st_e, dg_e = BoundaryIntegral.read_xsf(joinpath(fixdir, "orb_smooth.xsf"))
+    si_e = read_system_input(joinpath(fixdir, "system_smooth_lat.bie"))
+    insts_e = Dict(1 => OrbitalInstance(1, 1, (0, 0, 0)),
+                   2 => OrbitalInstance(2, 1, lattice_grid_steps(dg_e, st_e.primvec, (1, 0, 0))))
+    b_e = assemble_lattice_batch([dg_e], insts_e, [(1, 1), (1, 2)]; support_rtol = 1e-6)
+    res_e = solve_dielectric_lattice_batch(si_e.boxes, si_e.epses, si_e.eps_out, b_e;
+        n_quad = 4, rhs_atol = 1e-2, l_ec = 2.0, fmm_tol = 1e-6, gmres_rtol = 1e-8)
+
+    @testset "evaluate_batch_potential vs TKM-everywhere" begin
+        # targets: the batch's own support points (near) + a far ring at distance ~8
+        far = hcat(([8.0 * cos(t) + 1.5, 8.0 * sin(t) + 1.5, 1.5] for t in range(0, 2π; length = 17)[1:16])...)
+        targets = hcat(b_e.positions, far)
+        far_pad = 2.0 * maximum(norm.(BoundaryIntegral.true_cell_vectors(dg_e))) / dg_e.nx
+
+        Φ = evaluate_batch_potential(res_e.interface, res_e.sigma, res_e.sources, targets;
+            lhs_tol = 1e-6, volume_tol = 1e-8, far_pad = far_pad)
+        @test size(Φ) == (size(targets, 2), 2)
+
+        # reference: TKM at ALL targets (valid near and far) + the same layer map
+        pottrg = laplace3d_pottrg_fmm3d_corrected_hcubature(res_e.interface, targets, 1e-6, 1e-6, 5.0)
+        for a in 1:2
+            sa = BoundaryIntegral.screened_volume_source(res_e.interface, res_e.sources[a],
+                BoundaryIntegral.SharpScreening())
+            vals = BoundaryIntegral.TKM3D.ltkm3dc(1e-8, sa.positions;
+                charges = sa.weights .* sa.density, targets = targets, pgt = 1,
+                kmax = BoundaryIntegral._estimate_tkm3dc_kmax(sa))
+            @test vals.ier == 0
+            Φ_ref = real.(vals.pottarg) .+ (pottrg * res_e.sigma[:, a])
+            scale = maximum(abs.(Φ_ref))
+            @test maximum(abs.(Φ[:, a] .- Φ_ref)) < 1e-5 * scale
+        end
+    end
+
+    @testset "V via evaluate_batch_potential == four_index_matrix" begin
+        V_ref = four_index_matrix(si_e, res_e.interface, res_e.sources, res_e.sigma)
+        targets = b_e.positions                        # the group grid = what four_index uses
+        far_pad = 2.0 * maximum(norm.(BoundaryIntegral.true_cell_vectors(dg_e))) / dg_e.nx
+        Φ = evaluate_batch_potential(res_e.interface, res_e.sigma, res_e.sources, targets;
+            lhs_tol = si_e.solve.lhs_tol, volume_tol = si_e.solve.volume_tol, far_pad = far_pad)
+        K = 2
+        V = [LinearAlgebra.dot(b_e.weights .* b_e.densities[:, a], Φ[:, bb]) for a in 1:K, bb in 1:K]
+        @test maximum(abs.(V .- V_ref)) < 1e-6 * maximum(abs.(V_ref))
     end
 end

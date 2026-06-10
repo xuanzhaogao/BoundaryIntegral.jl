@@ -165,6 +165,56 @@ function batch_volume_sources(b::LatticeBatch)
 end
 
 """
+    evaluate_batch_potential(interface, Σ, sources, targets;
+        lhs_tol, volume_tol, far_pad, range_factor=5.0) -> Φ (n_targets × K)
+
+Total potential `Φ_a = u_inc[ρ_a] + u[σ_a]` of a solved batch at arbitrary targets.
+
+- `u[σ_a]`: corrected layer-potential map (FMM + hcubature near correction) built ONCE
+  for the target set, applied per column of Σ.
+- `u_inc[ρ_a]`: TKM3D volume potential of the screened density evaluated at all targets.
+  TKM uses a bounding box that spans both sources and targets to define its k-space grid;
+  splitting targets into near/far subsets would alter the combined box and change the
+  result, so all targets are evaluated together. `far_pad` is accepted for API
+  compatibility but is not used in the current (TKM-everywhere) implementation.
+
+Conventions match `four_index_matrix`: TKM returns the `1/(4π|r|)`-normalised potential
+and is used without further scaling; the scattered layer potential is the output of
+`laplace3d_pottrg_fmm3d_corrected_hcubature` applied to each column of Σ.
+"""
+function evaluate_batch_potential(interface, Σ::AbstractMatrix,
+        sources::Vector{<:VolumeSource{Float64, 3}}, targets::Matrix{Float64};
+        lhs_tol::Float64, volume_tol::Float64, far_pad::Float64,
+        range_factor::Float64 = 5.0)
+    K = length(sources)
+    nt = size(targets, 2)
+    size(targets, 1) == 3 || throw(ArgumentError("targets must be 3 × n"))
+    size(Σ, 2) == K || throw(DimensionMismatch("Σ columns ≠ number of sources"))
+
+    Φ = Matrix{Float64}(undef, nt, K)
+
+    # scattered part: build the corrected map once, apply per column
+    pottrg = laplace3d_pottrg_fmm3d_corrected_hcubature(interface, targets, lhs_tol, lhs_tol, range_factor)
+    for a in 1:K
+        Φ[:, a] = pottrg * Σ[:, a]
+    end
+
+    # incident part: TKM evaluated at ALL targets.
+    # TKM's k-space grid is set by the combined source+target bounding box; evaluating
+    # on a partial target set changes that box and gives inconsistent results.  We
+    # therefore always pass the full target matrix, exactly as four_index_matrix does.
+    for a in 1:K
+        sa = screened_volume_source(interface, sources[a], SharpScreening())
+        vals = TKM3D.ltkm3dc(volume_tol, sa.positions;
+            charges = sa.weights .* sa.density, targets = targets, pgt = 1,
+            kmax = _estimate_tkm3dc_kmax(sa))
+        vals.ier == 0 || error("TKM3D.ltkm3dc failed, ier=$(vals.ier)")
+        Φ[:, a] .+= real.(vals.pottarg)
+    end
+    return Φ
+end
+
+"""
     solve_dielectric_lattice_batch(boxes, epses, eps_out, b::LatticeBatch; kw...)
         -> (; sigma, interface, sources, stats)
 
