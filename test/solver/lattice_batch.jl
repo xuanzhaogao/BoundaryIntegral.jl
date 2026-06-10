@@ -22,5 +22,8 @@ using Test
         @test BoundaryIntegral._frame_overlap(4, 0, 0) == 1:4
         @test BoundaryIntegral._frame_overlap(4, 0, 4) === nothing   # disjoint
         @test BoundaryIntegral._frame_overlap(4, 0, 9) === nothing
+        @test BoundaryIntegral._frame_overlap(4, 0, -2) == 1:2   # negative offset
+        @test BoundaryIntegral._frame_overlap(4, -2, 0) == 1:2   # symmetric
+        @test BoundaryIntegral._frame_overlap(4, 0, 3) == 4:4    # single-point overlap
     end
 end
