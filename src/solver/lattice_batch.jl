@@ -172,11 +172,14 @@ Total potential `Φ_a = u_inc[ρ_a] + u[σ_a]` of a solved batch at arbitrary ta
 
 - `u[σ_a]`: corrected layer-potential map (FMM + hcubature near correction) built ONCE
   for the target set, applied per column of Σ.
-- `u_inc[ρ_a]`: TKM3D volume potential of the screened density evaluated at all targets.
-  TKM uses a bounding box that spans both sources and targets to define its k-space grid;
-  splitting targets into near/far subsets would alter the combined box and change the
-  result, so all targets are evaluated together. `far_pad` is accepted for API
-  compatibility but is not used in the current (TKM-everywhere) implementation.
+- `u_inc[ρ_a]`: batch-level near/far split on the shared support bounding box padded by
+  `far_pad`. Near targets: TKM volume potential per source (the combined source+target
+  box stays small — TKM's k-grid/truncation derive from that box, so feeding it
+  far-away targets would both inflate its cost and, on coarse data, shift its values).
+  Far targets: ONE `nd = K` point-charge FMM (potential/4π) over the screened
+  quadrature points — the trapezoidal far field of a compact density is accurate
+  (more accurate than TKM when the density is marginally resolved) since the far
+  field depends only on low moments. `far_pad` ≳ 2 grid steps.
 
 Conventions match `four_index_matrix`: TKM returns the `1/(4π|r|)`-normalised potential
 and is used without further scaling; the scattered layer potential is the output of
@@ -199,18 +202,53 @@ function evaluate_batch_potential(interface, Σ::AbstractMatrix,
         Φ[:, a] = pottrg * Σ[:, a]
     end
 
-    # incident part: TKM evaluated at ALL targets.
-    # TKM's k-space grid is set by the combined source+target bounding box; evaluating
-    # on a partial target set changes that box and gives inconsistent results.  We
-    # therefore always pass the full target matrix, exactly as four_index_matrix does.
-    for a in 1:K
-        sa = screened_volume_source(interface, sources[a], SharpScreening())
-        vals = TKM3D.ltkm3dc(volume_tol, sa.positions;
-            charges = sa.weights .* sa.density, targets = targets, pgt = 1,
-            kmax = _estimate_tkm3dc_kmax(sa))
-        vals.ier == 0 || error("TKM3D.ltkm3dc failed, ier=$(vals.ier)")
-        Φ[:, a] .+= real.(vals.pottarg)
+    # incident part: near/far split on the shared support bounding box (sources[1].positions)
+    src_pos = sources[1].positions
+    src_lo = minimum(src_pos; dims = 2)
+    src_hi = maximum(src_pos; dims = 2)
+    near_idx = findall(i -> (targets[1, i] >= src_lo[1] - far_pad &&
+                             targets[1, i] <= src_hi[1] + far_pad &&
+                             targets[2, i] >= src_lo[2] - far_pad &&
+                             targets[2, i] <= src_hi[2] + far_pad &&
+                             targets[3, i] >= src_lo[3] - far_pad &&
+                             targets[3, i] <= src_hi[3] + far_pad), 1:nt)
+    far_idx = setdiff(1:nt, near_idx)
+
+    # near targets: TKM per source (source+near box stays small)
+    if !isempty(near_idx)
+        near_targets = targets[:, near_idx]
+        for a in 1:K
+            sa = screened_volume_source(interface, sources[a], SharpScreening())
+            vals = TKM3D.ltkm3dc(volume_tol, sa.positions;
+                charges = sa.weights .* sa.density, targets = near_targets, pgt = 1,
+                kmax = _estimate_tkm3dc_kmax(sa))
+            vals.ier == 0 || error("TKM3D.ltkm3dc failed, ier=$(vals.ier)")
+            Φ[near_idx, a] .+= real.(vals.pottarg)
+        end
     end
+
+    # far targets: one nd=K batched point-charge FMM, potential / (4π)
+    if !isempty(far_idx)
+        far_targets = targets[:, far_idx]
+        # screened sources share positions; build nd=K charge matrix
+        sa1 = screened_volume_source(interface, sources[1], SharpScreening())
+        n_src = length(sa1.weights)
+        charges = Matrix{Float64}(undef, K, n_src)
+        for a in 1:K
+            sa = screened_volume_source(interface, sources[a], SharpScreening())
+            @inbounds for s in 1:n_src
+                charges[a, s] = sa.weights[s] * sa.density[s]
+            end
+        end
+        vals = lfmm3d(volume_tol, sa1.positions;
+            charges = charges, targets = far_targets, pgt = 1, nd = K)
+        # vals.pottarg is (K, n_far) for nd=K
+        pt = reshape(vals.pottarg, K, length(far_idx))
+        for a in 1:K
+            Φ[far_idx, a] .+= pt[a, :] ./ (4π)
+        end
+    end
+
     return Φ
 end
 

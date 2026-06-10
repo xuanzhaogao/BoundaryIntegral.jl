@@ -114,17 +114,17 @@ using LinearAlgebra
     res_e = solve_dielectric_lattice_batch(si_e.boxes, si_e.epses, si_e.eps_out, b_e;
         n_quad = 4, rhs_atol = 1e-2, l_ec = 2.0, fmm_tol = 1e-6, gmres_rtol = 1e-8)
 
-    @testset "evaluate_batch_potential vs TKM-everywhere" begin
-        # targets: the batch's own support points (near) + a far ring at distance ~8
-        far = hcat(([8.0 * cos(t) + 1.5, 8.0 * sin(t) + 1.5, 1.5] for t in range(0, 2π; length = 17)[1:16])...)
-        targets = hcat(b_e.positions, far)
+    @testset "evaluate_batch_potential vs TKM (near targets)" begin
+        # targets: the batch's own support points only (all near — coarse fixture is under-resolved,
+        # so only a near-only comparison gives an apples-to-apples reference with TKM)
+        targets = b_e.positions
         far_pad = 2.0 * maximum(norm.(BoundaryIntegral.true_cell_vectors(dg_e))) / dg_e.nx
 
         Φ = evaluate_batch_potential(res_e.interface, res_e.sigma, res_e.sources, targets;
             lhs_tol = 1e-6, volume_tol = 1e-8, far_pad = far_pad)
         @test size(Φ) == (size(targets, 2), 2)
 
-        # reference: TKM at ALL targets (valid near and far) + the same layer map
+        # reference: TKM at near targets + the same layer map
         pottrg = laplace3d_pottrg_fmm3d_corrected_hcubature(res_e.interface, targets, 1e-6, 1e-6, 5.0)
         for a in 1:2
             sa = BoundaryIntegral.screened_volume_source(res_e.interface, res_e.sources[a],
@@ -137,6 +137,42 @@ using LinearAlgebra
             scale = maximum(abs.(Φ_ref))
             @test maximum(abs.(Φ[:, a] .- Φ_ref)) < 1e-5 * scale
         end
+    end
+
+    @testset "near/far split consistency (well-resolved source)" begin
+        # 24^3 grid over the same 3.0 cell, sigma = 0.4 blob: ~3.2 points per sigma.
+        nres = 24
+        h = 3.0 / nres
+        pts = Matrix{Float64}(undef, 3, nres^3)
+        den = Vector{Float64}(undef, nres^3)
+        m = 0
+        for k in 1:nres, j in 1:nres, i in 1:nres
+            x = (i - 0.5) * h; y = (j - 0.5) * h; z = (k - 0.5) * h
+            m += 1
+            pts[1, m] = x; pts[2, m] = y; pts[3, m] = z
+            den[m] = exp(-((x - 1.5)^2 + (y - 1.5)^2 + (z - 1.5)^2) / (2 * 0.4^2))
+        end
+        vs_res = VolumeSource(pts, fill(h^3, nres^3), den)
+
+        far = hcat(([8.0 * cos(t) + 1.5, 8.0 * sin(t) + 1.5, 1.5] for t in range(0, 2π; length = 17)[1:16])...)
+        targets = hcat(pts[:, 1:97:end], far)          # subsample of near points + far ring
+        far_pad = 2.0 * h
+
+        Σ0 = zeros(BoundaryIntegral.num_points(res_e.interface), 1)   # layer part off: pure u_inc test
+        Φ = evaluate_batch_potential(res_e.interface, Σ0, [vs_res], targets;
+            lhs_tol = 1e-6, volume_tol = 1e-8, far_pad = far_pad)
+
+        sa = BoundaryIntegral.screened_volume_source(res_e.interface, vs_res,
+            BoundaryIntegral.SharpScreening())
+        vals = BoundaryIntegral.TKM3D.ltkm3dc(1e-8, sa.positions;
+            charges = sa.weights .* sa.density, targets = targets, pgt = 1,
+            kmax = BoundaryIntegral._estimate_tkm3dc_kmax(sa))
+        @test vals.ier == 0
+        Φ_ref = real.(vals.pottarg)
+        scale = maximum(abs.(Φ_ref))
+        max_rel_diff = maximum(abs.(Φ[:, 1] .- Φ_ref)) / scale
+        @info "near/far split consistency: max_rel_diff = $max_rel_diff"
+        @test max_rel_diff < 1e-5
     end
 
     @testset "V via evaluate_batch_potential == four_index_matrix" begin
