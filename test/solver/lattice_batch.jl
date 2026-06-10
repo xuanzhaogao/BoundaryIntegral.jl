@@ -71,5 +71,11 @@ using Test
               sort(b.densities[findall(!iszero, b.densities[:, 2]), 2])
         # gidx sorted & unique
         @test issorted(b.gidx) && allunique(b.gidx)
+        # support_rtol = 0: shifted pair occupies SHIFTED global indices, union grows
+        b0 = assemble_lattice_batch([dg], insts, [(1, 1), (2, 2)]; support_rtol = 0.0)
+        gx1 = sort(unique(g[1] for (s, g) in enumerate(b0.gidx) if b0.densities[s, 1] != 0))
+        gx2 = sort(unique(g[1] for (s, g) in enumerate(b0.gidx) if b0.densities[s, 2] != 0))
+        @test gx2 == gx1 .+ 2          # pair (2,2) is pair (1,1) translated by s1=(2,0,0)
+        @test length(b0.gidx) > count(!iszero, b0.densities[:, 1])   # union grew
     end
 end
