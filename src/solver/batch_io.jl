@@ -3,8 +3,6 @@
 # tmp-then-rename on the SAME filesystem, so a batch file either exists complete or
 # not at all; status scans never see partial writes.
 
-using Serialization
-
 const BATCH_FORMAT_VERSION = 1
 
 """
@@ -13,6 +11,7 @@ const BATCH_FORMAT_VERSION = 1
 Everything the post-eval phase needs from one solved batch: the raw truncated pair
 densities (global-grid indexed), the adapted interface, the layer densities Σ, and
 solve stats. Positions are NOT stored — they are recomputed from `gidx` + the template.
+Files are tied to the exact code version that wrote them — the `version` field guards the BatchResult layout only, not the serialized `interface` type; after changing interface/panel struct layouts, re-solve affected batches.
 """
 struct BatchResult
     version::Int
@@ -28,8 +27,9 @@ end
 
 "Atomic write: serialize to `<path>.tmp.<pid>`, then rename onto `path`."
 function save_batch_result(path::AbstractString, br::BatchResult)
-    mkpath(dirname(path))
-    tmp = string(path, ".tmp.", getpid())
+    d = dirname(path)
+    isempty(d) || mkpath(d)
+    tmp = string(path, ".tmp.", getpid(), "_", rand(UInt32))
     open(tmp, "w") do io
         serialize(io, br)
     end
