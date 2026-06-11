@@ -123,6 +123,19 @@ end
     end
 end
 
+@testset "rhs_dielectric_box3d_field vs hybrid" begin
+    gsrc = BoundaryIntegral.GaussianVolumeSource((0.0, 0.0, 0.0), 0.3, 12, 1e-6)
+    field = PrecomputedVolumeField(gsrc; tol = 1e-6, compute_pot = false)
+    iface = BoundaryIntegral.single_dielectric_box3d_rhs_adaptive(
+        4.0, 4.0, 1.0, 4, gsrc, 1.0, 0.26, 1e-3, 3.0, 1.0, Float64; max_depth = 8)
+
+    rhs_f = rhs_dielectric_box3d_field(iface, field, 1.0)
+    rhs_h = BoundaryIntegral.rhs_dielectric_box3d_hybrid(iface, gsrc, 1.0, 1e-6)
+
+    @test length(rhs_f) == BoundaryIntegral.num_points(iface)
+    @test maximum(abs, rhs_f .- rhs_h) <= 5e-4 * maximum(abs, rhs_h)
+end
+
 @testset "adaptive builder: field overload reproduces VolumeSource path" begin
     gsrc = BoundaryIntegral.GaussianVolumeSource((0.0, 0.0, 0.0), 0.3, 12, 1e-6)
     field = PrecomputedVolumeField(gsrc; tol = 1e-4, compute_pot = false)

@@ -215,6 +215,36 @@ function rhs_dielectric_box3d_hybrid(
 end
 const Rhs_dielectric_box3d_hybrid = rhs_dielectric_box3d_hybrid # backward compat
 
+"""
+    rhs_dielectric_box3d_field(interface, field, eps_src) -> Vector
+
+Dielectric-interface RHS assembled from a `PrecomputedVolumeField`
+(in-box targets: type-2 NUFFT on stored coefficients; out-of-box: direct
+threaded summation). Drop-in alternative to `rhs_dielectric_box3d_hybrid`
+when the same source density is used for many assemblies/evaluations.
+"""
+function rhs_dielectric_box3d_field(
+    interface::DielectricInterface{P, Float64},
+    field::PrecomputedVolumeField{Float64},
+    eps_src::Float64,
+) where {P <: AbstractPanel}
+    n_points = num_points(interface)
+    targets = Matrix{Float64}(undef, 3, n_points)
+    normals = Matrix{Float64}(undef, 3, n_points)
+    for (i, point) in enumerate(eachpoint(interface))
+        targets[1, i] = point.panel_point.point[1]
+        targets[2, i] = point.panel_point.point[2]
+        targets[3, i] = point.panel_point.point[3]
+        normals[1, i] = point.panel_point.normal[1]
+        normals[2, i] = point.panel_point.normal[2]
+        normals[3, i] = point.panel_point.normal[3]
+    end
+    # _rhs_volume_targets_field returns the same sign as _rhs_volume_targets_hybrid;
+    # negate to match the sign convention of rhs_dielectric_box3d_hybrid (and
+    # rhs_dielectric_box3d / rhs_dielectric_box3d_fmm3d).
+    return -_rhs_volume_targets_field(field, targets, normals, eps_src)
+end
+
 # --- Multi-box convenience overloads with automatic background screening ---
 
 function rhs_dielectric_box3d(

@@ -20,7 +20,8 @@ export interface_approx
 export interface_uniform_samples
 
 export PointSource, VolumeSource
-export PrecomputedVolumeField, volume_field_potential, volume_field_gradient
+export PrecomputedVolumeField, volume_field_potential, volume_field_gradient,
+       rhs_dielectric_box3d_field
 export screened_volume_source
 export SharpScreening, SoftMixPermittivity, SoftMixInversePermittivity
 
