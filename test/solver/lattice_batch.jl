@@ -206,11 +206,12 @@ using LinearAlgebra
     end
 
     @testset "V via evaluate_batch_potential == four_index_matrix" begin
-        V_ref = four_index_matrix(si_e, res_e.interface, res_e.sources, res_e.sigma)
+        V_ref = four_index_matrix(res_e.interface, res_e.sources, res_e.sigma;
+                                  lhs_tol = 1e-6, volume_tol = 1e-8)
         targets = b_e.positions                        # the group grid = what four_index uses
         far_pad = 2.0 * maximum(norm.(BoundaryIntegral.true_cell_vectors(dg_e))) / dg_e.nx
         Φ = evaluate_batch_potential(res_e.interface, res_e.sigma, res_e.sources, targets;
-            lhs_tol = si_e.solve.lhs_tol, volume_tol = si_e.solve.volume_tol, far_pad = far_pad)
+            lhs_tol = 1e-6, volume_tol = 1e-8, far_pad = far_pad)
         K = 2
         V = [LinearAlgebra.dot(b_e.weights .* b_e.densities[:, a], Φ[:, bb]) for a in 1:K, bb in 1:K]
         @test maximum(abs.(V .- V_ref)) < 1e-6 * maximum(abs.(V_ref))

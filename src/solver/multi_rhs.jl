@@ -464,25 +464,22 @@ solve_dielectric_box3d_group(bie_path::AbstractString, center_id::Int; kw...) =
     solve_dielectric_box3d_group(read_system_input(bie_path), center_id; kw...)
 
 """
-    four_index_matrix(si, interface, sources, Σ) -> K×K
+    four_index_matrix(interface, sources, Σ; lhs_tol, volume_tol, range_factor=5.0) -> K×K
 
-Step 7: the four-index integrals `V[a,b] = ∫ ρ_a (u_inc[ρ_b] + u[σ_b]) dx` over a solved
-group. `u_inc` is the incident potential of the SCREENED source (TKM volume solve); `u[σ_b]`
-is the scattered layer potential (FMM + hcubature near correction); the contraction uses the
-RAW target density. All sources share the grid, so the layer-potential operator and each
-`u_inc` are built once and reused across columns.
+Step 7 contraction: V[a,b] = ∫ ρ_a (u_inc[ρ_b] + u[σ_b]). Independent reference for
+`evaluate_batch_potential` (different evaluation path: TKM incident + corrected-FMM pottrg
+at the group grid). No longer tied to SystemInput.
 """
-function four_index_matrix(si::SystemInput, interface, sources::Vector{<:VolumeSource{Float64, 3}},
-        Σ::AbstractMatrix)
+function four_index_matrix(interface, sources::Vector{<:VolumeSource{Float64, 3}},
+        Σ::AbstractMatrix; lhs_tol::Float64, volume_tol::Float64, range_factor::Float64 = 5.0)
     K = length(sources)
     K == 0 && return zeros(Float64, 0, 0)
-    sp = si.solve
     targets = sources[1].positions
-    pottrg = laplace3d_pottrg_fmm3d_corrected_hcubature(interface, targets, sp.lhs_tol, sp.lhs_tol, 5.0)
+    pottrg = laplace3d_pottrg_fmm3d_corrected_hcubature(interface, targets, lhs_tol, lhs_tol, range_factor)
     u_inc = Vector{Vector{Float64}}(undef, K)
     for b in 1:K
         sb = screened_volume_source(interface, sources[b], SharpScreening())
-        vals = TKM3D.ltkm3dc(sp.volume_tol, sb.positions; charges = sb.weights .* sb.density,
+        vals = TKM3D.ltkm3dc(volume_tol, sb.positions; charges = sb.weights .* sb.density,
                              targets = targets, pgt = 1, kmax = _estimate_tkm3dc_kmax(sb))
         vals.ier == 0 || error("TKM3D.ltkm3dc failed, ier=$(vals.ier)")
         u_inc[b] = real.(vals.pottarg)
@@ -505,8 +502,10 @@ One-shot Steps 0–7 for a center group: solve for Σ, then evaluate the K×K fo
 """
 function four_index_integrals(si::SystemInput, center_id::Int; kw...)
     sol = solve_dielectric_box3d_group(si, center_id; kw...)
+    sp = si.solve
     V = isempty(sol.sources) ? zeros(Float64, 0, 0) :
-        four_index_matrix(si, sol.interface, sol.sources, sol.sigma)
+        four_index_matrix(sol.interface, sol.sources, sol.sigma;
+                          lhs_tol = sp.lhs_tol, volume_tol = sp.volume_tol)
     return (; V = V, labels = sol.labels, sigma = sol.sigma, interface = sol.interface,
             sources = sol.sources, group = sol.group, stats = sol.stats)
 end
