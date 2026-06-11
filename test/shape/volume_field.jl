@@ -122,3 +122,20 @@ end
         @test abs(rhs_field[i] - rhs_hyb[i]) <= 5e-4 * scale
     end
 end
+
+@testset "adaptive builder: field overload reproduces vs path" begin
+    gsrc = BoundaryIntegral.GaussianVolumeSource((0.0, 0.0, 0.0), 0.3, 12, 1e-6)
+    field = PrecomputedVolumeField(gsrc; tol = 1e-4, compute_pot = false)
+
+    iface_vs = BoundaryIntegral.single_dielectric_box3d_rhs_adaptive(
+        4.0, 4.0, 1.0, 4, gsrc, 1.0, 0.26, 1e-3, 3.0, 1.0, Float64; max_depth = 8)
+    iface_f = BoundaryIntegral.single_dielectric_box3d_rhs_adaptive(
+        4.0, 4.0, 1.0, 4, field, 1.0, 0.26, 1e-3, 3.0, 1.0, Float64; max_depth = 8)
+
+    @test length(iface_f.panels) == length(iface_vs.panels)
+    @test BoundaryIntegral.num_points(iface_f) == BoundaryIntegral.num_points(iface_vs)
+    # identical refinement path => identical panel geometry
+    c_vs = sort([sum(p.corners[1]) + 3 * sum(p.corners[3]) for p in iface_vs.panels])
+    c_f  = sort([sum(p.corners[1]) + 3 * sum(p.corners[3]) for p in iface_f.panels])
+    @test isapprox(c_vs, c_f; rtol = 1e-12)
+end

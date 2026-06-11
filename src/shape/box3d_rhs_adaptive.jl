@@ -508,3 +508,122 @@ function single_dielectric_box3d_rhs_adaptive_varquad(
         n_quad_min = n_quad_min,
     )
 end
+
+# --- PrecomputedVolumeField path: same refinement logic, but the per-depth
+# --- RHS evaluation uses the stored spectral field (no per-call type-1
+# --- NUFFT / FFT replanning / KDTree classify / FMM setup).
+
+function _rhs_panel3d_resolved_volume_field(
+    panels::Vector{TempPanel3D{T}},
+    field::PrecomputedVolumeField{T},
+    eps_src::T,
+    ns::Vector{T},
+    ws::Vector{T},
+    atol::T,
+) where {T}
+    n_panels = length(panels)
+    if n_panels == 0
+        return Bool[]
+    end
+    resolved = fill(false, n_panels)
+    n_quad = length(ns)
+    λ = gl_barycentric_weights(ns, ws)
+    n_pts = 10
+    xs = range(-one(T), one(T); length = n_pts)
+    ys = range(-one(T), one(T); length = n_pts)
+    targets, normals, n_per_panel = _rhs_panel3d_refinement_targets(panels, ns, ws; n_pts = n_pts)
+
+    rhs_vals = _rhs_volume_targets_field(field, targets, normals, eps_src)
+    @info "    rhs panel field evaluation, targets: $(size(targets, 2))"
+
+    idx = 0
+    for p in 1:n_panels
+        quad_vals = Matrix{T}(undef, n_quad, n_quad)
+        for i in 1:n_quad
+            for j in 1:n_quad
+                idx += 1
+                quad_vals[i, j] = rhs_vals[idx]
+            end
+        end
+        err = zero(T)
+        for u in xs
+            rx = T.(barycentric_row(ns, λ, u))
+            for v in ys
+                ry = T.(barycentric_row(ns, λ, v))
+                approx = zero(T)
+                for i in 1:n_quad
+                    for j in 1:n_quad
+                        approx += quad_vals[i, j] * rx[i] * ry[j]
+                    end
+                end
+                idx += 1
+                err = max(err, abs(rhs_vals[idx] - approx))
+            end
+        end
+        resolved[p] = err <= atol
+    end
+    return resolved
+end
+
+function single_dielectric_box3d_rhs_adaptive(
+    Lx::T,
+    Ly::T,
+    Lz::T,
+    n_quad::Int,
+    field::PrecomputedVolumeField{T},
+    eps_src::T,
+    l_ec::T,
+    rhs_atol::T,
+    eps_in::T,
+    eps_out::T,
+    ::Type{T} = Float64;
+    max_depth::Int = 128,
+    alpha::T = sqrt(T(2)),
+) where {T}
+    ns, ws = gausslegendre(n_quad)
+    @info "box3d volume field rhs adaptive panel generation, source points: $(length(field.charges))"
+
+    solved = TempPanel3D{T}[]
+    unsolved = _box3d_rhs_adaptive_initial_panels(Lx, Ly, Lz, alpha)
+    depth = 0
+    while !isempty(unsolved) && depth < max_depth
+        @info "  depth $depth, unsolved panels: $(length(unsolved))"
+        resolved = _rhs_panel3d_resolved_volume_field(unsolved, field, eps_src, ns, ws, rhs_atol)
+        next_unsolved = TempPanel3D{T}[]
+        for i in eachindex(unsolved)
+            tpl = unsolved[i]
+            if resolved[i]
+                push!(solved, tpl)
+            else
+                append!(next_unsolved, divide_temp_panel3d(tpl, 2, 2))
+            end
+        end
+        unsolved = next_unsolved
+        depth += 1
+    end
+    append!(solved, unsolved)
+
+    rough_ec = copy(solved)
+    refined = TempPanel3D{T}[]
+    while !isempty(rough_ec)
+        tpl = popfirst!(rough_ec)
+        has_ec = tpl.is_a_corner || tpl.is_b_corner || tpl.is_c_corner || tpl.is_d_corner ||
+            tpl.is_ab_edge || tpl.is_bc_edge || tpl.is_cd_edge || tpl.is_da_edge
+        L_ab = norm(tpl.b .- tpl.a)
+        L_da = norm(tpl.a .- tpl.d)
+        if has_ec && max(L_ab, L_da) > l_ec
+            append!(rough_ec, divide_temp_panel3d(tpl, 2, 2))
+        else
+            push!(refined, tpl)
+        end
+    end
+
+    panels = Vector{FlatPanel{T, 3}}()
+    for tpl in refined
+        is_edge = tpl.is_ab_edge || tpl.is_bc_edge || tpl.is_cd_edge || tpl.is_da_edge ||
+            tpl.is_a_corner || tpl.is_b_corner || tpl.is_c_corner || tpl.is_d_corner
+        push!(panels, rect_panel3d_discretize(tpl.a, tpl.b, tpl.c, tpl.d, ns, ws, tpl.normal; is_edge = is_edge))
+    end
+
+    return DielectricInterface(panels, fill(eps_in, length(panels)), fill(eps_out, length(panels)))
+end
