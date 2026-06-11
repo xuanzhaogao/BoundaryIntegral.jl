@@ -17,6 +17,7 @@ using Test
     # core
     include("core/panels.jl")
     include("core/sources.jl")
+    include("shape/volume_field.jl")
 
     # kernel functions
     include("kernel/laplace2d.jl")
