@@ -348,7 +348,7 @@ end
     assemble_v(c::CampaignInput) -> (; max_rel_asym, n)
 
 Final phase (single process): gather all V files into the dense `n_pairs × n_pairs`
-matrix, write `V_full.jls` and `report.txt` with the max-rel-asymmetry diagnostic.
+matrix, write `V_full.tsv` and `report.txt` with the max-rel-asymmetry diagnostic.
 """
 function assemble_v(c::CampaignInput)
     batches = read_manifest(manifest_path(c))
