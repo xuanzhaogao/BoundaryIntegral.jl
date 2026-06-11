@@ -149,17 +149,27 @@ end
     @test size(f1.grad_grid) == (f1.nfdim..., 3)
 
     # mixed batch: 200 quasi-random in-box targets (interp-only vs standard
-    # type-2) + 4 out-of-box targets (FMM in both modes — identical path)
+    # type-2) + 8 exact box corners (pins inclusive-boundary behavior of
+    # in_field_box and the interpolation stencil at the box faces) + 4
+    # out-of-box targets (FMM in both modes — identical path)
     nin = 200
-    targets = Matrix{Float64}(undef, 3, nin + 4)
+    ncorners = 8
+    nout = 4
+    targets = Matrix{Float64}(undef, 3, nin + ncorners + nout)
     alphas = (sqrt(2) - 1, sqrt(3) - 1, sqrt(5) - 2)   # deterministic low-discrepancy fill
     for d in 1:3
         targets[d, 1:nin] .= f0.lo[d] .+ mod.(alphas[d] .* (1:nin), 1.0) .* (f0.hi[d] - f0.lo[d])
     end
-    targets[:, nin + 1:end] .= [3.0  0.0  -3.0  4.0;
-                                0.0  3.5   2.0  4.0;
-                                0.0  1.0  -2.0  4.0]
-    @test count(i -> BoundaryIntegral.in_field_box(f0, targets, i), 1:(nin + 4)) == nin
+    # 8 corners of the [lo, hi] box — all must be classified as in-box
+    for (ci, (cx, cy, cz)) in enumerate(Iterators.product((f0.lo[1], f0.hi[1]),
+                                                           (f0.lo[2], f0.hi[2]),
+                                                           (f0.lo[3], f0.hi[3])))
+        targets[:, nin + ci] .= [cx, cy, cz]
+    end
+    targets[:, nin + ncorners + 1:end] .= [3.0  0.0  -3.0  4.0;
+                                            0.0  3.5   2.0  4.0;
+                                            0.0  1.0  -2.0  4.0]
+    @test count(i -> BoundaryIntegral.in_field_box(f0, targets, i), 1:(nin + ncorners + nout)) == nin + ncorners
 
     pot0 = volume_field_potential(f0, targets)
     pot1 = volume_field_potential(f1, targets)

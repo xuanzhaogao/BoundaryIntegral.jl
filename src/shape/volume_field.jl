@@ -50,7 +50,10 @@ the spectrum having decayed to ~tol at `kmax` (guaranteed by the kmax
 estimate); the padding keeps the active modes away from the fine-grid
 Nyquist, where the upsampfac≈1 interpolation kernel loses accuracy —
 validated at ~5e-9 max relative deviation from the standard path (pad 1.25;
-pad 1.0 degrades the gradient to ~2e-6).
+pad 1.0 degrades the gradient to ~2e-6). Transient construction memory peaks
+at approximately 2× the final cached footprint, as the phi-corrected padded
+arrays, the bfft workspace, and (if `compute_grad = true`) all four grids
+coexist before the coefficient arrays are released (~16 GB at production scale).
 """
 struct PrecomputedVolumeField{T <: AbstractFloat}
     sources::Matrix{T}
@@ -69,6 +72,12 @@ struct PrecomputedVolumeField{T <: AbstractFloat}
     nfdim::Union{Nothing, NTuple{3, Int}}
     pot_grid::Union{Nothing, Array{Complex{T}, 3}}
     grad_grid::Union{Nothing, Array{Complex{T}, 4}}
+    # frozen interpolation kernel parameters (set at construction in cache_fft
+    # mode; Nothing otherwise): nspread and Horner coefficients derived from
+    # nfdim and tol at construction time, stored so evaluation never re-derives
+    # them and cannot silently diverge if TKM3D's size-dependent heuristics change.
+    interp_nspread::Union{Nothing, Int}
+    interp_hc::Union{Nothing, Matrix{Float64}}
 end
 
 function PrecomputedVolumeField(
@@ -116,8 +125,9 @@ function PrecomputedVolumeField(
     grad_coeff = compute_grad ? TKM3D._spectral_gradient_coeffs_3d(coeff, kx, ky, kz) : nothing
     prefactor = dks[1] * dks[2] * dks[3] / T(2π)^3
     nfdim = nothing; pot_grid = nothing; grad_grid = nothing
+    interp_nspread = nothing; interp_hc = nothing
     if cache_fft
-        nfdim, pot_grid, grad_grid =
+        nfdim, pot_grid, grad_grid, interp_nspread, interp_hc =
             _field_cache_fft_grids(coeff, grad_coeff, tolT, T(cache_fft_pad), compute_pot)
     end
     return PrecomputedVolumeField{T}(
@@ -125,7 +135,8 @@ function PrecomputedVolumeField(
         dks, nmodes, km, tolT, prefactor,
         (compute_pot && !cache_fft) ? coeff : nothing,
         cache_fft ? nothing : grad_coeff,
-        nfdim, pot_grid, grad_grid)
+        nfdim, pot_grid, grad_grid,
+        interp_nspread, interp_hc)
 end
 
 # --- cache_fft mode internals -----------------------------------------------
@@ -136,6 +147,20 @@ end
 # A spreadinterponly type-2 exec on the result is then exactly equivalent to
 # the standard type-2 on the original coefficients, provided the spectrum has
 # decayed at the mode-box edge (see the struct docstring).
+#
+# TKM3D private-API surface reached by this feature (these should be promoted
+# to a public TKM3D spread-interp API before wide use):
+#   _ltkm3dd_spreadonly_upsampfac
+#   _ltkm3dd_spreadonly_kernel_params
+#   _ltkm3dd_spreadonly_horner_coeffs
+#   _ltkm3dd_spreadonly_next235even
+#   _ltkm3dd_spreadonly_onedim_fseries_kernel
+#   _ltkm3dd_spreadonly_deconvolveshuffle3d_dir2
+#   _ltkm3dd_spreadonly_evaluate_kernel_runtime
+#   TKM3D.FFTW  (accessed for bfft!)
+# Pre-existing private usage (present before this feature):
+#   _finufft_type2_eval_3d
+#   _spectral_gradient_coeffs_3d
 
 function _field_cache_fft_grids(
     coeff::Array{Complex{T}, 3},
@@ -145,6 +170,8 @@ function _field_cache_fft_grids(
     compute_pot::Bool,
 ) where {T <: AbstractFloat}
     nmodes = size(coeff)
+    # Derive kernel parameters from nmodes (the construction-time fine-grid
+    # size) rather than nfdim so that the stored params match the grids.
     sigma = TKM3D._ltkm3dd_spreadonly_upsampfac(nmodes, Float64(tol))
     params = TKM3D._ltkm3dd_spreadonly_kernel_params(Float64(tol), sigma; kerformula = 1)
     hc = TKM3D._ltkm3dd_spreadonly_horner_coeffs(params)
@@ -158,7 +185,8 @@ function _field_cache_fft_grids(
     pot_grid = nothing
     if compute_pot
         fw = TKM3D._ltkm3dd_spreadonly_deconvolveshuffle3d_dir2(coeff, nfdim, phi1, phi2, phi3)
-        pot_grid = TKM3D.FFTW.bfft(fw)
+        TKM3D.FFTW.bfft!(fw)   # in-place: fw is already the final-size padded array
+        pot_grid = fw
     end
     grad_grid = nothing
     if grad_coeff !== nothing
@@ -166,10 +194,14 @@ function _field_cache_fft_grids(
         for d in 1:3
             fw = TKM3D._ltkm3dd_spreadonly_deconvolveshuffle3d_dir2(
                 view(grad_coeff, :, :, :, d), nfdim, phi1, phi2, phi3)
-            grad_grid[:, :, :, d] = TKM3D.FFTW.bfft(fw)
+            TKM3D.FFTW.bfft!(fw)   # in-place: reuse fw without a second allocation
+            grad_grid[:, :, :, d] = fw
         end
     end
-    return nfdim, pot_grid, grad_grid
+    # Return frozen kernel parameters so the struct can store them; evaluation
+    # uses these rather than re-deriving from nfdim, preventing silent divergence
+    # if TKM3D's size-dependent heuristics ever change.
+    return nfdim, pot_grid, grad_grid, params.nspread, hc
 end
 
 # Interp-only type-2 on the stored fine grid; equivalent to
@@ -255,14 +287,16 @@ function _field_interponly_type2(
     tzn::Vector{T},
     grid::Array{Complex{T}, N},
 ) where {T <: AbstractFloat, N}
-    sigma = TKM3D._ltkm3dd_spreadonly_upsampfac(f.nfdim, Float64(f.tol))
-    params = TKM3D._ltkm3dd_spreadonly_kernel_params(Float64(f.tol), sigma; kerformula = 1)
-    hc = TKM3D._ltkm3dd_spreadonly_horner_coeffs(params)
+    # Use kernel parameters frozen at construction time (stored in the struct)
+    # rather than re-deriving from nfdim; this prevents silent divergence if
+    # TKM3D's _ltkm3dd_spreadonly_upsampfac heuristics ever become size-dependent.
+    ns = f.interp_nspread::Int
+    hc = f.interp_hc::Matrix{Float64}
     ntrans = N == 3 ? 1 : size(grid, 4)
     out = Matrix{Complex{T}}(undef, length(txn), ntrans)
     for d in 1:ntrans
         g = N == 3 ? grid : view(grid, :, :, :, d)
-        _field_interp3d!(view(out, :, d), g, txn, tyn, tzn, params.nspread, hc)
+        _field_interp3d!(view(out, :, d), g, txn, tyn, tzn, ns, hc)
     end
     return out
 end
