@@ -3,12 +3,8 @@
 
 using TOML
 
-# BoxGeom is also defined in utils/system_input.jl (to be deleted in Task 5).
-# We re-declare it here so that toml_input.jl does not depend on system_input.jl,
-# and Task 5 can delete the duplicate without any other change.
-# NOTE: if system_input.jl is still loaded first, Julia will see the same const value
-# and not error (identical NamedTuple type alias).  To avoid a "cannot redefine" error
-# we guard with isdefined.
+# BoxGeom is defined in solver/lattice_batch.jl (loaded before this file).
+# The @isdefined guard here is kept for safety in case include order ever changes.
 if !@isdefined(BoxGeom)
     const BoxGeom = NamedTuple{(:center, :Lx, :Ly, :Lz),
         Tuple{NTuple{3,Float64}, Float64, Float64, Float64}}

@@ -5,6 +5,15 @@
 # here carry an integer global-frame offset and never wrap — so >5 distinct cells per
 # direction are representable and pair products are exact on frame intersections.
 
+# BoxGeom: shared type alias for a box geometry (center + half-lengths).
+# Defined here (before campaign/toml_input.jl is loaded) so that lattice_batch.jl
+# can use it in solve_dielectric_lattice_batch.  toml_input.jl re-declares it with
+# an @isdefined guard for backward compatibility.
+if !@isdefined(BoxGeom)
+    const BoxGeom = NamedTuple{(:center, :Lx, :Ly, :Lz),
+        Tuple{NTuple{3,Float64}, Float64, Float64, Float64}}
+end
+
 """
     lattice_grid_steps(datagrid, primvec, n::NTuple{3,Int}) -> NTuple{3,Int}
 

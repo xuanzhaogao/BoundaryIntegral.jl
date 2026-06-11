@@ -47,22 +47,20 @@ export single_dielectric_box3d_rhs_adaptive_varquad
 export lhs_dielectric_box2d, lhs_dielectric_box2d_fmm2d, rhs_dielectric_box2d
 export Lhs_dielectric_box2d, Lhs_dielectric_box2d_fmm2d, Rhs_dielectric_box2d
 export lhs_dielectric_box3d, lhs_dielectric_box3d_fmm3d, lhs_dielectric_box3d_fmm3d_corrected
-export rhs_dielectric_box3d, rhs_dielectric_box3d_fmm3d, rhs_dielectric_box3d_hybrid, rhs_dielectric_box3d_fmm3d_batched
+export rhs_dielectric_box3d, rhs_dielectric_box3d_fmm3d, rhs_dielectric_box3d_hybrid
 export Lhs_dielectric_box3d, Lhs_dielectric_box3d_fmm3d, Lhs_dielectric_box3d_fmm3d_corrected
 export Rhs_dielectric_box3d, Rhs_dielectric_box3d_fmm3d, Rhs_dielectric_box3d_hybrid
 
 # linear algebra
 export solve_lu, solve_gmres
 
-# system input
-export read_system_input, SystemInput, OrbitalEntry, SolveParams, resolved_l_ec
 export density_centroid
 
 # multi-rhs solver
-export pair_density_source, RHSGroup, assemble_rhs_group, num_pairs, build_group_interface
+export pair_density_source
 export batched_lhs_dielectric_box3d_fmm3d_corrected, BatchedDielectricOperator
-export solve_dielectric_box3d_group, solve_dielectric_box3d_block
-export four_index_matrix, four_index_integrals, group_volume_sources
+export solve_dielectric_box3d_block
+export four_index_matrix
 
 # lattice batch
 export lattice_grid_steps, OrbitalInstance
@@ -115,7 +113,6 @@ include("utils/quad_order.jl")
 include("utils/best_grid.jl")
 include("utils/gaussians.jl")
 include("utils/xsf_reader.jl")
-include("utils/system_input.jl")
 
 # # solvers
 include("solver/dielectric_box2d.jl")
