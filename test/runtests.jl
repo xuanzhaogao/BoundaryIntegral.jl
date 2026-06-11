@@ -49,6 +49,7 @@ using Test
     include("campaign/v_output.jl")
     if run_full
         include("campaign/pipeline.jl")
+        include("campaign/distributed_ext.jl")
     end
 
     # solver functions

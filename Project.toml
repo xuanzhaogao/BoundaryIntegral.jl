@@ -23,12 +23,16 @@ TKM3D = "5e3dfc9c-492c-4308-90e6-1b6681d75e39"
 TOML = "fa267f1f-6049-4f14-aa54-33bafae1ed76"
 
 [weakdeps]
+Distributed = "8ba89e20-285c-5b6f-9357-94700520ee1b"
 Makie = "ee78f7c6-11fb-53f2-987a-cfe4a2b5a57a"
+SlurmClusterManager = "c82cd089-7bf7-41d7-976b-6b5d413cbe0a"
 
 [extensions]
+BoundaryIntegralDistributedExt = ["Distributed", "SlurmClusterManager"]
 MakieExt = ["Makie"]
 
 [compat]
+Distributed = "1"
 FMM2D = "0.2.0"
 FMM3D = "1.0.1"
 FastGaussQuadrature = "1.1.0"
@@ -41,6 +45,7 @@ LinearMaps = "3.11.4"
 Makie = "0.24"
 NearestNeighbors = "0.4.20"
 Serialization = "1.11.0"
+SlurmClusterManager = "1"
 Sockets = "1"
 SparseArrays = "1.12.0"
 SpecialFunctions = "2.6.1"
@@ -50,8 +55,10 @@ TOML = "1"
 julia = "1.10, 1.11, 1.12"
 
 [extras]
+Distributed = "8ba89e20-285c-5b6f-9357-94700520ee1b"
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
+SlurmClusterManager = "c82cd089-7bf7-41d7-976b-6b5d413cbe0a"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [targets]
-test = ["Test", "Random"]
+test = ["Test", "Random", "Distributed", "SlurmClusterManager"]

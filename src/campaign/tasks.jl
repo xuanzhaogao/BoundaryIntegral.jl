@@ -434,3 +434,16 @@ Load a campaign from `toml_path` and run the full four-index pipeline in memory.
 """
 four_index_integrals(toml_path::AbstractString) =
     four_index_integrals(load_campaign(toml_path))
+
+# ---------------------------------------------------------------------------
+# run_phase stub (implemented by BoundaryIntegralDistributedExt)
+# ---------------------------------------------------------------------------
+
+"""
+    run_phase(c, phase; workers=0)
+
+Parallel driver for `:solve`/`:eval` over `pending_batches`. Implemented by the
+`BoundaryIntegralDistributedExt` extension (load `Distributed` + `SlurmClusterManager`).
+Without the extension loaded, this errors with a hint.
+"""
+function run_phase end
