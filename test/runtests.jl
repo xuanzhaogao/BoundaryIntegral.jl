@@ -46,6 +46,9 @@ using Test
     include("campaign/toml_input.jl")
     include("campaign/geometry.jl")
     include("campaign/manifest.jl")
+    if run_full
+        include("campaign/pipeline.jl")
+    end
 
     # solver functions
     if run_full
