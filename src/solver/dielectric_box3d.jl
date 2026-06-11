@@ -222,6 +222,8 @@ Dielectric-interface RHS assembled from a `PrecomputedVolumeField`
 (in-box targets: type-2 NUFFT on stored coefficients; out-of-box: direct
 threaded summation). Drop-in alternative to `rhs_dielectric_box3d_hybrid`
 when the same source density is used for many assemblies/evaluations.
+Returns the same sign convention as `rhs_dielectric_box3d` /
+`rhs_dielectric_box3d_fmm3d` (an internal negation is applied to match).
 """
 function rhs_dielectric_box3d_field(
     interface::DielectricInterface{P, Float64},
