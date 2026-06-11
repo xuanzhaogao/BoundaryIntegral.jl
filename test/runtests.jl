@@ -44,6 +44,9 @@ using Test
     include("solver/lattice_batch.jl")
     include("solver/batch_io.jl")
 
+    # campaign
+    include("campaign/toml_input.jl")
+
     # solver functions
     if run_full
         include("solver/dielectric_box2d.jl")

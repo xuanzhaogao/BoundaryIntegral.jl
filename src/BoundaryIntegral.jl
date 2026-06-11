@@ -7,6 +7,7 @@ using FastGaussQuadrature, LegendrePolynomials, SpecialFunctions
 using Krylov, LinearMaps, HCubature
 using NearestNeighbors
 using ForwardDiff
+using TOML
 
 using FMM2D, FMM3D
 using TKM3D
@@ -72,6 +73,10 @@ export evaluate_batch_potential
 # batch IO
 export BatchResult, save_batch_result, load_batch_result, is_complete_batch
 
+# campaign
+export CampaignInput, OrbitalSpec, load_campaign
+export manifest_path, centers_path, targets_path, rho_store_path, logs_dir, batch_path, v_path
+
 # visualization
 export viz_2d, viz_3d
 export viz_3d_surface
@@ -115,6 +120,9 @@ include("solver/dielectric_box3d.jl")
 include("solver/multi_rhs.jl")
 include("solver/lattice_batch.jl")
 include("solver/batch_io.jl")
+
+# # campaign
+include("campaign/toml_input.jl")
 
 # # visualization
 include("visualization/viz_2d.jl")
