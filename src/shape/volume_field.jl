@@ -201,11 +201,11 @@ function _rhs_volume_targets_field(
 ) where {T}
     n = size(targets, 2)
     @assert size(normals, 2) == n
+    @assert size(normals, 1) == 3
     grad = volume_field_gradient(field, targets)
     rhs_vals = Vector{T}(undef, n)
     @inbounds for i in 1:n
-        rhs_vals[i] = -(normals[1, i] * grad[1, i] + normals[2, i] * grad[2, i] +
-                        normals[3, i] * grad[3, i]) / eps_src
+        rhs_vals[i] = _rhs_from_grad(view(normals, :, i), view(grad, :, i), eps_src, one(T))
     end
     return rhs_vals
 end
