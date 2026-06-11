@@ -45,7 +45,7 @@ function PrecomputedVolumeField(
     compute_pot::Bool = true,
     compute_grad::Bool = true,
 ) where {T <: AbstractFloat}
-    (compute_pot || compute_grad) || throw(ArgumentError("nothing to precompute"))
+    (compute_pot || compute_grad) || throw(ArgumentError("at least one of compute_pot or compute_grad must be true"))
     tolT = T(tol)
     tolT > zero(T) || throw(ArgumentError("tol must be positive"))
     sources, charges = _volume_source_fmm_sources(vs)
@@ -140,6 +140,7 @@ Potential of the precomputed field at `targets` (3 x n), free-space
 direct threaded summation.
 """
 function volume_field_potential(f::PrecomputedVolumeField{T}, targets::AbstractMatrix{<:Real}) where {T}
+    size(targets, 1) == 3 || throw(ArgumentError("targets must have shape (3, n)"))
     f.coeff === nothing && throw(ArgumentError("field was built with compute_pot = false"))
     trg = Matrix{T}(targets)
     n = size(trg, 2)
@@ -148,12 +149,7 @@ function volume_field_potential(f::PrecomputedVolumeField{T}, targets::AbstractM
     bidx = findall(inb); oidx = findall(!, inb)
     if !isempty(bidx)
         txn, tyn, tzn = _field_scaled_targets(f, trg, bidx)
-        plan = TKM3D._finufft_make_type2_plan_3d(txn, tyn, tzn, 1, f.tol, f.nmodes, 1, T)
-        vals = try
-            TKM3D._finufft_type2_exec_3d(plan, f.coeff)
-        finally
-            TKM3D.FINUFFT.finufft_destroy!(plan)
-        end
+        vals = TKM3D._finufft_type2_eval_3d(txn, tyn, tzn, 1, f.tol, f.coeff)
         for (k, i) in enumerate(bidx)
             out[i] = f.prefactor * real(vals[k])
         end
@@ -169,6 +165,7 @@ Gradient of the precomputed field at `targets` (3 x n), free-space
 `1/(4π r)` normalization.
 """
 function volume_field_gradient(f::PrecomputedVolumeField{T}, targets::AbstractMatrix{<:Real}) where {T}
+    size(targets, 1) == 3 || throw(ArgumentError("targets must have shape (3, n)"))
     f.grad_coeff === nothing && throw(ArgumentError("field was built with compute_grad = false"))
     trg = Matrix{T}(targets)
     n = size(trg, 2)
@@ -177,12 +174,7 @@ function volume_field_gradient(f::PrecomputedVolumeField{T}, targets::AbstractMa
     bidx = findall(inb); oidx = findall(!, inb)
     if !isempty(bidx)
         txn, tyn, tzn = _field_scaled_targets(f, trg, bidx)
-        plan = TKM3D._finufft_make_type2_plan_3d(txn, tyn, tzn, 1, f.tol, f.nmodes, 3, T)
-        vals = try
-            TKM3D._finufft_type2_exec_3d(plan, f.grad_coeff)   # n_in x 3
-        finally
-            TKM3D.FINUFFT.finufft_destroy!(plan)
-        end
+        vals = TKM3D._finufft_type2_eval_3d(txn, tyn, tzn, 1, f.tol, f.grad_coeff)
         for (k, i) in enumerate(bidx)
             out[1, i] = f.prefactor * real(vals[k, 1])
             out[2, i] = f.prefactor * real(vals[k, 2])

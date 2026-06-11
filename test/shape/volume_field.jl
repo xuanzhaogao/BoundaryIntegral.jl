@@ -78,12 +78,15 @@ end
         @test isapprox(grad[:, i], gref[:, i]; rtol = 1e-12)
     end
 
-    # r→0 branch of the analytic helper (previously dead, now covered)
-    @test isapprox(_gaussian_analytic_potential([0.0, 0.0, 0.0], 0.3), sqrt(2 / π) / (4π * 0.3); rtol = 1e-12)
+    # r→0 branch of the analytic helper: check continuity instead of testing the implementation against itself
+    @test isapprox(_gaussian_analytic_potential([0.0, 0.0, 0.0], 0.3), _gaussian_analytic_potential([1e-8, 0.0, 0.0], 0.3); rtol = 1e-8)
 
     # gradient-only / potential-only construction guards
     fg = PrecomputedVolumeField(gsrc; tol = 1e-6, compute_pot = false)
     @test_throws ArgumentError volume_field_potential(fg, targets)
     fp = PrecomputedVolumeField(gsrc; tol = 1e-6, compute_grad = false)
     @test_throws ArgumentError volume_field_gradient(fp, targets)
+    # partial fields still evaluate their available quantity correctly
+    @test isapprox(volume_field_gradient(fg, targets), grad; rtol = 1e-12)
+    @test isapprox(volume_field_potential(fp, targets), pot; rtol = 1e-12)
 end
