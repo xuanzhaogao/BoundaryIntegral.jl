@@ -29,3 +29,9 @@ using Test
     @test endswith(manifest_path(c), "manifest.tsv")
     @test BoundaryIntegral.campaign_l_ec(c) ≈ 2.0     # l_ec given directly
 end
+
+@testset "pair_overrides parse" begin
+    fixdir = joinpath(@__DIR__, "..", "fixtures")
+    c = load_campaign(joinpath(fixdir, "system_overrides.toml"))
+    @test c.pair_overrides == [(1, 1), (1, 2)]
+end
