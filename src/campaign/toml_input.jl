@@ -3,12 +3,7 @@
 
 using TOML
 
-# BoxGeom is defined in solver/lattice_batch.jl (loaded before this file).
-# The @isdefined guard here is kept for safety in case include order ever changes.
-if !@isdefined(BoxGeom)
-    const BoxGeom = NamedTuple{(:center, :Lx, :Ly, :Lz),
-        Tuple{NTuple{3,Float64}, Float64, Float64, Float64}}
-end
+# BoxGeom is defined in solver/lattice_batch.jl
 
 """
     OrbitalSpec(type, pos)
