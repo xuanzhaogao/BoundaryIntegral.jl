@@ -29,7 +29,7 @@ end
 # Uses the exact result: φ(r) = erf(r / (√2 σ)) / (4π r).
 function _gaussian_analytic_potential(target, sigma)
     r = sqrt(target[1]^2 + target[2]^2 + target[3]^2)
-    r < eps() && return inv(sqrt(2π) * sigma) / (4π)   # L'Hopital limit
+    r < eps() && return sqrt(2 / π) / (4π * sigma)      # L'Hopital limit: erf(x)/x → 2/√π as x→0
     return BoundaryIntegral.SpecialFunctions.erf(r / (sqrt(2) * sigma)) / (4π * r)
 end
 
@@ -77,6 +77,9 @@ end
         @test isapprox(pot[i], pref[i]; rtol = 1e-12)
         @test isapprox(grad[:, i], gref[:, i]; rtol = 1e-12)
     end
+
+    # r→0 branch of the analytic helper (previously dead, now covered)
+    @test isapprox(_gaussian_analytic_potential([0.0, 0.0, 0.0], 0.3), sqrt(2 / π) / (4π * 0.3); rtol = 1e-12)
 
     # gradient-only / potential-only construction guards
     fg = PrecomputedVolumeField(gsrc; tol = 1e-6, compute_pot = false)
