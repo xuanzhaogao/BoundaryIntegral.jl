@@ -21,6 +21,12 @@ target-dependent Fourier box previously forced a fresh type-1 NUFFT + FFT
 plan at every refinement depth (~23 s per call on the production monolayer
 density; measured 16x build speedup with max rel deviation 1.4e-5 and no
 refinement-decision changes).
+
+Memory: `coeff` holds `prod(nmodes)` complex doubles and `grad_coeff` three
+times that (≈1 GB and ≈3 GB at the production kmax); construction with
+`compute_grad = true` transiently holds both even if `compute_pot = false`.
+Use the `compute_pot`/`compute_grad` flags to store only what the consumer
+needs.
 """
 struct PrecomputedVolumeField{T <: AbstractFloat}
     sources::Matrix{T}
