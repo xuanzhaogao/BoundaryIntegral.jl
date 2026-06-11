@@ -13,7 +13,7 @@ include("fixture_campaign.jl")
         for id in [1, 2]; eval_batch(c, id); end
         rep = assemble_v(c)
         @test rep.max_rel_asym < 1e-2
-        @test isfile(joinpath(c.root, "V_full.jls"))
+        @test isfile(joinpath(c.root, "V_full.tsv"))
 
         # in-memory path: same campaign (new dir so no files), compare to batched V files
         res = four_index_integrals(c)

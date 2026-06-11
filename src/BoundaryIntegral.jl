@@ -79,6 +79,7 @@ export CenterInfo, BatchSpec, enumerate_centers, enumerate_pairs, build_batches
 export write_centers, read_centers, write_manifest, read_manifest
 export prepare, solve_batch, consolidate, eval_batch, assemble_v, pending_batches
 export four_index_integrals
+export write_v_table
 
 # visualization
 export viz_2d, viz_3d
@@ -128,6 +129,7 @@ include("campaign/toml_input.jl")
 include("campaign/geometry.jl")
 include("campaign/manifest.jl")
 include("campaign/tasks.jl")
+include("campaign/v_output.jl")
 
 # # visualization
 include("visualization/viz_2d.jl")

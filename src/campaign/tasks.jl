@@ -371,7 +371,7 @@ function assemble_v(c::CampaignInput)
 
     scale        = maximum(abs.(V))
     max_rel_asym = maximum(abs.(V .- transpose(V))) / scale
-    _atomic_serialize(joinpath(c.root, "V_full.jls"), (; pair_ids, V))
+    write_v_table(joinpath(c.root, "V_full.tsv"), pair_ids, V)
     report = sprint() do io
         println(io, "campaign: $(c.name)")
         println(io, "pairs: $n   batches: $(length(batches))")
