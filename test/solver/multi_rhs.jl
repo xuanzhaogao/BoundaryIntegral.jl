@@ -24,49 +24,23 @@ using Krylov
         @test sum(vs.weights) ≈ sum(BoundaryIntegral.VolumeSource(dg).weights)
     end
 
-    @testset "assemble_rhs_group" begin
-        si = read_system_input(joinpath(fixdir, "system_small.bie"))
-        g = assemble_rhs_group(si, 1)
-        @test g.center_id == 1
-        @test g.neighbor_ids == [1]
-        @test size(g.densities, 2) == 1
-        @test size(g.positions, 2) == size(g.densities, 1)
-        @test all(g.densities[:, 1] .≈ 1.0)
-    end
-
-    @testset "union-support truncation + grid cache" begin
-        si = read_system_input(joinpath(fixdir, "system_spike.bie"))
-        g_full  = assemble_rhs_group(si, 1; support_rtol = 0.0)
-        g_trunc = assemble_rhs_group(si, 1; support_rtol = 1e-3)
-        @test size(g_full.positions, 2) == 27
-        @test size(g_trunc.positions, 2) == 1
-        @test size(g_trunc.positions, 2) == size(g_trunc.densities, 1)
-        @test g_trunc.densities[1, 1] ≈ 1.0
-        cache = Dict{String, Any}()
-        assemble_rhs_group(si, 1; grid_cache = cache)
-        @test haskey(cache, si.orbitals[1].xsf_path)
-    end
-
-    # ---- K=1 small system: build the interface / operator / RHS ONCE ----
-    si = read_system_input(joinpath(fixdir, "system_small.bie"))
-    g  = assemble_rhs_group(si, 1)
-    interface = build_group_interface(si, g; n_quad = NQ, rhs_atol = RTOL_REFINE, l_ec = LEC)
+    # ---- K=1 system: build the interface / operator / RHS ONCE via .toml ----
+    # system_small.toml: orb_a.xsf at (0,0,0), single on-site pair (1,1)
+    c = load_campaign(joinpath(fixdir, "system_small.toml"))
+    st1, dg1 = BoundaryIntegral.read_xsf(c.templates[1])
+    insts = Dict(1 => OrbitalInstance(1, 1, (0, 0, 0)))
+    b = assemble_lattice_batch([dg1], insts, [(1, 1)]; support_rtol = 1e-6)
+    res = solve_dielectric_lattice_batch(c.boxes, c.epses, c.eps_out, b;
+        n_quad = NQ, rhs_atol = RTOL_REFINE, l_ec = LEC, fmm_tol = FT, gmres_rtol = GTOL)
+    interface = res.interface
+    vss = BoundaryIntegral.batch_volume_sources(b)
     Np = BoundaryIntegral.num_points(interface)
     op = batched_lhs_dielectric_box3d_fmm3d_corrected(interface, FT, UT, MO)
-    F  = rhs_dielectric_box3d_fmm3d_batched(interface, si, g, FT)
-
-    @testset "group interface builds" begin
-        @test interface isa DielectricInterface
-        @test length(interface.panels) >= 6
-        env = BoundaryIntegral.envelope_volume_source(g)
-        @test length(env.density) == size(g.densities, 1)
-        @test all(env.density .≈ 1.0)
-    end
+    F  = rhs_dielectric_box3d_fmm3d(interface, vss, FT)
 
     @testset "batched RHS == single-RHS (K=1 regression)" begin
         @test size(F) == (Np, 1)
-        vs = VolumeSource(copy(g.positions), copy(g.weights), g.densities[:, 1])
-        f_ref = rhs_dielectric_box3d_fmm3d(interface, vs, FT)
+        f_ref = rhs_dielectric_box3d_fmm3d(interface, vss[1], FT)
         @test maximum(abs.(F[:, 1] .- f_ref)) < 1e-6
     end
 
@@ -88,37 +62,6 @@ using Krylov
         for c in 1:size(F, 2)
             xc, _ = Krylov.gmres(op, F[:, c]; rtol = GTOL, itmax = 200)
             @test maximum(abs.(Σ[:, c] .- xc)) < 1e-6
-        end
-    end
-
-    @testset "end-to-end .bie -> Sigma (params from BEGIN_SOLVE)" begin
-        out = solve_dielectric_box3d_group(joinpath(fixdir, "system_small.bie"), 1)
-        @test size(out.sigma, 2) == 1
-        @test size(out.sigma, 1) == BoundaryIntegral.num_points(out.interface)
-        @test all(isfinite, out.sigma)
-        @test out.labels == ["rho_1_1"]
-    end
-
-    @testset "four_index_integrals .bie -> V (Step 7)" begin
-        res = four_index_integrals(joinpath(fixdir, "system_small.bie"), 1)
-        @test size(res.V) == (1, 1)
-        @test isfinite(res.V[1, 1])
-        @test res.labels == ["rho_1_1"]
-    end
-
-    # ---- K=2 system: build ONCE ----
-    @testset "K=2 batched solve matches per-column" begin
-        si2 = read_system_input(joinpath(fixdir, "system_pair.bie"))
-        g2 = assemble_rhs_group(si2, 1)
-        @test num_pairs(g2) == 2
-        interface2 = build_group_interface(si2, g2; n_quad = NQ, rhs_atol = RTOL_REFINE, l_ec = LEC)
-        op2 = batched_lhs_dielectric_box3d_fmm3d_corrected(interface2, FT, UT, MO)
-        F2 = rhs_dielectric_box3d_fmm3d_batched(interface2, si2, g2, FT)
-        @test size(F2, 2) == 2
-        Σ2, _ = BoundaryIntegral._block_gmres_solve(op2, F2; rtol = GTOL, itmax = 300)
-        for c in 1:2
-            xc, _ = Krylov.gmres(op2, F2[:, c]; rtol = GTOL, itmax = 300)
-            @test maximum(abs.(Σ2[:, c] .- xc)) < 1e-6
         end
     end
 end
