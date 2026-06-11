@@ -77,6 +77,8 @@ export BatchResult, save_batch_result, load_batch_result, is_complete_batch
 export CampaignInput, OrbitalSpec, load_campaign
 export manifest_path, centers_path, targets_path, rho_store_path, logs_dir, batch_path, v_path
 export snap_orbital
+export CenterInfo, BatchSpec, enumerate_centers, enumerate_pairs, build_batches
+export write_centers, read_centers, write_manifest, read_manifest
 
 # visualization
 export viz_2d, viz_3d
@@ -125,6 +127,7 @@ include("solver/batch_io.jl")
 # # campaign
 include("campaign/toml_input.jl")
 include("campaign/geometry.jl")
+include("campaign/manifest.jl")
 
 # # visualization
 include("visualization/viz_2d.jl")
