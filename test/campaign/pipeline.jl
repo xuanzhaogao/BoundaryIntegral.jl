@@ -12,7 +12,7 @@ include("fixture_campaign.jl")
         consolidate(c)
         for id in [1, 2]; eval_batch(c, id); end
         rep = assemble_v(c)
-        @test rep.max_rel_asym < 0.2   # coarse solve; 5.7% observed; sanity only
+        @test rep.max_rel_asym < 1e-2
         @test isfile(joinpath(c.root, "V_full.jls"))
 
         # in-memory path: same campaign (new dir so no files), compare to batched V files
