@@ -13,8 +13,12 @@ Laplace kernel `TKM3D.truncated_laplace3d_hat`, and (optionally) materialize
 the spectral gradient coefficients.
 
 Evaluation (per batch): targets inside B use a type-2 NUFFT on the stored
-coefficients — the FFT dimensions never change, so FFTW planning is reused;
-targets outside B use an exact direct threaded sum (no FMM setup).
+coefficients — near the source support this spectral evaluation is the only
+accurate option (point-charge summation has O(1%) quadrature error there);
+the FFT dimensions never change, so FFTW planning is reused. Targets outside
+B are well separated from the support and are evaluated with the FMM
+(`lfmm3d` at the field tolerance) — equivalent to the exact point sum within
+tolerance and asymptotically scalable in the batch size.
 
 This removes the dominant cost of the RHS-adaptive mesh build, where the
 target-dependent Fourier box previously forced a fresh type-1 NUFFT + FFT
@@ -102,48 +106,13 @@ function _field_scaled_targets(f::PrecomputedVolumeField{T}, targets, idxs) wher
     return txn, tyn, tzn
 end
 
-function _direct_potential!(out::AbstractVector{T}, sources, charges, targets, idxs) where {T}
-    isempty(idxs) && return out
-    sx = sources[1, :]; sy = sources[2, :]; sz = sources[3, :]
-    Threads.@threads for ii in eachindex(idxs)
-        i = idxs[ii]
-        x, y, z = targets[1, i], targets[2, i], targets[3, i]
-        acc = zero(T)
-        @inbounds @simd for j in eachindex(charges)
-            dx = x - sx[j]; dy = y - sy[j]; dz = z - sz[j]
-            acc += charges[j] / sqrt(dx * dx + dy * dy + dz * dz)
-        end
-        out[i] = acc / (4 * T(π))
-    end
-    return out
-end
-
-function _direct_gradient!(out::AbstractMatrix{T}, sources, charges, targets, idxs) where {T}
-    isempty(idxs) && return out
-    sx = sources[1, :]; sy = sources[2, :]; sz = sources[3, :]
-    Threads.@threads for ii in eachindex(idxs)
-        i = idxs[ii]
-        x, y, z = targets[1, i], targets[2, i], targets[3, i]
-        gx = zero(T); gy = zero(T); gz = zero(T)
-        @inbounds @simd for j in eachindex(charges)
-            dx = x - sx[j]; dy = y - sy[j]; dz = z - sz[j]
-            r2 = dx * dx + dy * dy + dz * dz
-            s = charges[j] / (r2 * sqrt(r2))
-            gx -= s * dx; gy -= s * dy; gz -= s * dz
-        end
-        out[1, i] = gx / (4 * T(π))
-        out[2, i] = gy / (4 * T(π))
-        out[3, i] = gz / (4 * T(π))
-    end
-    return out
-end
 
 """
     volume_field_potential(field, targets) -> Vector
 
 Potential of the precomputed field at `targets` (3 x n), free-space
 `1/(4π r)` normalization. In-box targets via type-2 NUFFT, out-of-box via
-direct threaded summation.
+FMM at the field tolerance.
 """
 function volume_field_potential(f::PrecomputedVolumeField{T}, targets::AbstractMatrix{<:Real}) where {T}
     size(targets, 1) == 3 || throw(ArgumentError("targets must have shape (3, n)"))
@@ -160,7 +129,12 @@ function volume_field_potential(f::PrecomputedVolumeField{T}, targets::AbstractM
             out[i] = f.prefactor * real(vals[k])
         end
     end
-    _direct_potential!(out, f.sources, f.charges, trg, oidx)
+    if !isempty(oidx)
+        vals = lfmm3d(f.tol, f.sources; charges = f.charges, targets = trg[:, oidx], pgt = 1)
+        for (k, i) in enumerate(oidx)
+            out[i] = vals.pottarg[k] / (4 * T(π))   # FMM3D uses the 1/r kernel
+        end
+    end
     return out
 end
 
@@ -168,7 +142,8 @@ end
     volume_field_gradient(field, targets) -> 3 x n Matrix
 
 Gradient of the precomputed field at `targets` (3 x n), free-space
-`1/(4π r)` normalization.
+`1/(4π r)` normalization. In-box targets via type-2 NUFFT, out-of-box via
+FMM at the field tolerance.
 """
 function volume_field_gradient(f::PrecomputedVolumeField{T}, targets::AbstractMatrix{<:Real}) where {T}
     size(targets, 1) == 3 || throw(ArgumentError("targets must have shape (3, n)"))
@@ -187,7 +162,14 @@ function volume_field_gradient(f::PrecomputedVolumeField{T}, targets::AbstractMa
             out[3, i] = f.prefactor * real(vals[k, 3])
         end
     end
-    _direct_gradient!(out, f.sources, f.charges, trg, oidx)
+    if !isempty(oidx)
+        vals = lfmm3d(f.tol, f.sources; charges = f.charges, targets = trg[:, oidx], pgt = 2)
+        for (k, i) in enumerate(oidx)
+            out[1, i] = vals.gradtarg[1, k] / (4 * T(π))   # FMM3D uses the 1/r kernel
+            out[2, i] = vals.gradtarg[2, k] / (4 * T(π))
+            out[3, i] = vals.gradtarg[3, k] / (4 * T(π))
+        end
+    end
     return out
 end
 

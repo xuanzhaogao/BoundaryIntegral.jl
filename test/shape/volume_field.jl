@@ -70,12 +70,12 @@ end
         @test isapprox(grad[:, i], ganal; rtol = 1e-2)
     end
 
-    # out-of-box: direct sum, identical arithmetic to the reference
+    # out-of-box: FMM at f.tol = 1e-6 vs exact point sum
     pref = _ref_potential(src, q, targets)
     gref = _ref_gradient(src, q, targets)
     for i in 5:8
-        @test isapprox(pot[i], pref[i]; rtol = 1e-12)
-        @test isapprox(grad[:, i], gref[:, i]; rtol = 1e-12)
+        @test isapprox(pot[i], pref[i]; rtol = 1e-5)
+        @test isapprox(grad[:, i], gref[:, i]; rtol = 1e-5)
     end
 
     # r→0 branch of the analytic helper: check continuity instead of testing the implementation against itself
@@ -87,8 +87,9 @@ end
     fp = PrecomputedVolumeField(gsrc; tol = 1e-6, compute_grad = false)
     @test_throws ArgumentError volume_field_gradient(fp, targets)
     # partial fields still evaluate their available quantity correctly
-    @test isapprox(volume_field_gradient(fg, targets), grad; rtol = 1e-12)
-    @test isapprox(volume_field_potential(fp, targets), pot; rtol = 1e-12)
+    # two independent FMM calls; thread-order nondeterminism
+    @test isapprox(volume_field_gradient(fg, targets), grad; rtol = 1e-8)
+    @test isapprox(volume_field_potential(fp, targets), pot; rtol = 1e-8)
 end
 
 @testset "_rhs_volume_targets_field vs hybrid" begin
