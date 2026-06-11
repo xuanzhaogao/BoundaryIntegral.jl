@@ -1,6 +1,7 @@
 """
     PrecomputedVolumeField(vs; tol, kmax = nothing, margin_h = 5.0,
-                           compute_pot = true, compute_grad = true)
+                           compute_pot = true, compute_grad = true,
+                           cache_fft = false, cache_fft_pad = 1.25)
 
 Target-independent precomputed spectral representation of the free-space
 Laplace potential (`1/(4π r)` convention) of a `VolumeSource`, for evaluation
@@ -31,6 +32,25 @@ times that (≈1 GB and ≈3 GB at the production kmax); construction with
 `compute_grad = true` transiently holds both even if `compute_pot = false`.
 Use the `compute_pot`/`compute_grad` flags to store only what the consumer
 needs.
+
+Cached-FFT mode (`cache_fft = true`, experimental): the standard in-box path
+re-runs the FFT of the full coefficient grid inside FINUFFT on EVERY type-2
+exec (~0.4 s at production scale, independent of the target count). With
+`cache_fft = true` that FFT is done once at construction: the spectral
+coefficients are divided by the FINUFFT spreading-kernel Fourier factors
+(pre-deconvolution: the interpolation kernel's smoothing is corrected per
+mode up front), zero-padded onto a fine grid of `cache_fft_pad * nmodes`
+per axis, and inverse-FFT'd; per evaluation a native threaded ES-kernel
+interpolation reads the stored fine grid (cost ∝ targets, not modes —
+equivalent to FINUFFT's `spreadinterponly` type-2 exec, see
+`_field_interponly_type2` for why it is not routed through finufft itself).
+The coefficient arrays are dropped and replaced by the fine grids
+(`cache_fft_pad^3` ≈ 2x their size at the default 1.25). Accuracy relies on
+the spectrum having decayed to ~tol at `kmax` (guaranteed by the kmax
+estimate); the padding keeps the active modes away from the fine-grid
+Nyquist, where the upsampfac≈1 interpolation kernel loses accuracy —
+validated at ~5e-9 max relative deviation from the standard path (pad 1.25;
+pad 1.0 degrades the gradient to ~2e-6).
 """
 struct PrecomputedVolumeField{T <: AbstractFloat}
     sources::Matrix{T}
@@ -45,6 +65,10 @@ struct PrecomputedVolumeField{T <: AbstractFloat}
     prefactor::T
     coeff::Union{Nothing, Array{Complex{T}, 3}}
     grad_coeff::Union{Nothing, Array{Complex{T}, 4}}
+    # cache_fft mode: kernel-corrected fine-grid values for interp-only type-2
+    nfdim::Union{Nothing, NTuple{3, Int}}
+    pot_grid::Union{Nothing, Array{Complex{T}, 3}}
+    grad_grid::Union{Nothing, Array{Complex{T}, 4}}
 end
 
 function PrecomputedVolumeField(
@@ -54,8 +78,11 @@ function PrecomputedVolumeField(
     margin_h::Real = 5.0,
     compute_pot::Bool = true,
     compute_grad::Bool = true,
+    cache_fft::Bool = false,
+    cache_fft_pad::Real = 1.25,
 ) where {T <: AbstractFloat}
     (compute_pot || compute_grad) || throw(ArgumentError("at least one of compute_pot or compute_grad must be true"))
+    cache_fft_pad >= 1 || throw(ArgumentError("cache_fft_pad must be >= 1"))
     tolT = T(tol)
     tolT > zero(T) || throw(ArgumentError("tol must be positive"))
     sources, charges = _volume_source_fmm_sources(vs)
@@ -88,10 +115,156 @@ function PrecomputedVolumeField(
     end
     grad_coeff = compute_grad ? TKM3D._spectral_gradient_coeffs_3d(coeff, kx, ky, kz) : nothing
     prefactor = dks[1] * dks[2] * dks[3] / T(2π)^3
+    nfdim = nothing; pot_grid = nothing; grad_grid = nothing
+    if cache_fft
+        nfdim, pot_grid, grad_grid =
+            _field_cache_fft_grids(coeff, grad_coeff, tolT, T(cache_fft_pad), compute_pot)
+    end
     return PrecomputedVolumeField{T}(
         sources, charges, lo, hi, (center[1], center[2], center[3]),
         dks, nmodes, km, tolT, prefactor,
-        compute_pot ? coeff : nothing, grad_coeff)
+        (compute_pot && !cache_fft) ? coeff : nothing,
+        cache_fft ? nothing : grad_coeff,
+        nfdim, pot_grid, grad_grid)
+end
+
+# --- cache_fft mode internals -----------------------------------------------
+# Mirrors TKM3D's discrete spread-only conventions (_ltkm3dd_eval_spreadonly,
+# dir-2 leg): centered-mode coefficients are divided by the spreading-kernel
+# Fourier factors phi (the deconvolution FINUFFT skips in spreadinterponly
+# mode), placed in FFT ordering on the fine grid, and bfft'd (iflag = +1).
+# A spreadinterponly type-2 exec on the result is then exactly equivalent to
+# the standard type-2 on the original coefficients, provided the spectrum has
+# decayed at the mode-box edge (see the struct docstring).
+
+function _field_cache_fft_grids(
+    coeff::Array{Complex{T}, 3},
+    grad_coeff::Union{Nothing, Array{Complex{T}, 4}},
+    tol::T,
+    pad::T,
+    compute_pot::Bool,
+) where {T <: AbstractFloat}
+    nmodes = size(coeff)
+    sigma = TKM3D._ltkm3dd_spreadonly_upsampfac(nmodes, Float64(tol))
+    params = TKM3D._ltkm3dd_spreadonly_kernel_params(Float64(tol), sigma; kerformula = 1)
+    hc = TKM3D._ltkm3dd_spreadonly_horner_coeffs(params)
+    # padded relative to the TKM rule: keeps the active modes away from the
+    # fine-grid Nyquist, where the upsampfac≈1 kernel correction degrades
+    nfdim = ntuple(d -> TKM3D._ltkm3dd_spreadonly_next235even(
+        max(ceil(Int, Float64(pad) * params.upsampfac * nmodes[d]), 2 * params.nspread)), 3)
+    phi1 = T.(TKM3D._ltkm3dd_spreadonly_onedim_fseries_kernel(nfdim[1], params, hc))
+    phi2 = T.(TKM3D._ltkm3dd_spreadonly_onedim_fseries_kernel(nfdim[2], params, hc))
+    phi3 = T.(TKM3D._ltkm3dd_spreadonly_onedim_fseries_kernel(nfdim[3], params, hc))
+    pot_grid = nothing
+    if compute_pot
+        fw = TKM3D._ltkm3dd_spreadonly_deconvolveshuffle3d_dir2(coeff, nfdim, phi1, phi2, phi3)
+        pot_grid = TKM3D.FFTW.bfft(fw)
+    end
+    grad_grid = nothing
+    if grad_coeff !== nothing
+        grad_grid = Array{Complex{T}, 4}(undef, nfdim..., 3)
+        for d in 1:3
+            fw = TKM3D._ltkm3dd_spreadonly_deconvolveshuffle3d_dir2(
+                view(grad_coeff, :, :, :, d), nfdim, phi1, phi2, phi3)
+            grad_grid[:, :, :, d] = TKM3D.FFTW.bfft(fw)
+        end
+    end
+    return nfdim, pot_grid, grad_grid
+end
+
+# Interp-only type-2 on the stored fine grid; equivalent to
+# TKM3D._finufft_type2_eval_3d(txn, tyn, tzn, 1, f.tol, coeff) of the original
+# coefficients.
+#
+# The interpolation is done natively (threaded Julia) rather than through a
+# FINUFFT spreadinterponly plan: finufft 2.5.x's execute allocates and
+# value-initializes its nf-sized internal workspace on EVERY exec even though
+# spreadinterponly never touches it (finufft_core.cpp, fwBatch_), a measured
+# ~6.4 ns/fine-grid-pt floor that would cost ~0.8 s per exec at production
+# scale — more than the FFT this mode exists to avoid. The native interp is
+# exactly FINUFFT's: same ES kernel piecewise polynomials (shared with the
+# phi correction above), same fold u = frac(x/2π + 1/2)·nf — the half-period
+# offset is compensated by the (-1)^k sign FINUFFT's kernel Fourier series
+# bakes into phi (the `-exp` factor in _ltkm3dd_spreadonly_onedim_fseries_
+# kernel). Validated against finufft's spreadinterponly exec to 1.4e-8.
+
+# ES-kernel stencil for one coordinate: grid indices (1-based, periodic) and
+# kernel weights for the ns fine-grid points supporting a target at x.
+function _field_interp_stencil!(
+    idx::Vector{Int},
+    w::Vector{T},
+    x::T,
+    nf::Int,
+    ns::Int,
+    hc::Matrix{Float64},
+) where {T <: AbstractFloat}
+    u = mod(Float64(x) / (2π) + 0.5, 1.0) * nf   # FINUFFT fold: grid units in [0, nf)
+    istart = ceil(Int, u - ns / 2)
+    x1 = istart - u                              # in [-ns/2, -ns/2+1)
+    @inbounds for l in 0:(ns - 1)
+        idx[l + 1] = mod(istart + l, nf) + 1
+        w[l + 1] = T(TKM3D._ltkm3dd_spreadonly_evaluate_kernel_runtime(x1 + l, hc, ns))
+    end
+    return nothing
+end
+
+function _field_interp3d!(
+    out::AbstractVector{Complex{T}},
+    grid::AbstractArray{Complex{T}, 3},
+    txn::Vector{T},
+    tyn::Vector{T},
+    tzn::Vector{T},
+    ns::Int,
+    hc::Matrix{Float64},
+) where {T <: AbstractFloat}
+    nf1, nf2, nf3 = size(grid)
+    n = length(txn)
+    nch = max(1, min(Threads.nthreads(), n))
+    Threads.@threads for c in 1:nch
+        i1 = Vector{Int}(undef, ns); w1 = Vector{T}(undef, ns)
+        i2 = Vector{Int}(undef, ns); w2 = Vector{T}(undef, ns)
+        i3 = Vector{Int}(undef, ns); w3 = Vector{T}(undef, ns)
+        @inbounds for j in (div((c - 1) * n, nch) + 1):div(c * n, nch)
+            _field_interp_stencil!(i1, w1, txn[j], nf1, ns, hc)
+            _field_interp_stencil!(i2, w2, tyn[j], nf2, ns, hc)
+            _field_interp_stencil!(i3, w3, tzn[j], nf3, ns, hc)
+            acc = zero(Complex{T})
+            for l3 in 1:ns
+                iz = i3[l3]
+                accz = zero(Complex{T})
+                for l2 in 1:ns
+                    iy = i2[l2]
+                    s = zero(Complex{T})
+                    @simd for l1 in 1:ns
+                        s += grid[i1[l1], iy, iz] * w1[l1]
+                    end
+                    accz += s * w2[l2]
+                end
+                acc += accz * w3[l3]
+            end
+            out[j] = acc
+        end
+    end
+    return out
+end
+
+function _field_interponly_type2(
+    f::PrecomputedVolumeField{T},
+    txn::Vector{T},
+    tyn::Vector{T},
+    tzn::Vector{T},
+    grid::Array{Complex{T}, N},
+) where {T <: AbstractFloat, N}
+    sigma = TKM3D._ltkm3dd_spreadonly_upsampfac(f.nfdim, Float64(f.tol))
+    params = TKM3D._ltkm3dd_spreadonly_kernel_params(Float64(f.tol), sigma; kerformula = 1)
+    hc = TKM3D._ltkm3dd_spreadonly_horner_coeffs(params)
+    ntrans = N == 3 ? 1 : size(grid, 4)
+    out = Matrix{Complex{T}}(undef, length(txn), ntrans)
+    for d in 1:ntrans
+        g = N == 3 ? grid : view(grid, :, :, :, d)
+        _field_interp3d!(view(out, :, d), g, txn, tyn, tzn, params.nspread, hc)
+    end
+    return out
 end
 
 @inline in_field_box(f::PrecomputedVolumeField, targets::AbstractMatrix, i::Integer) =
@@ -116,7 +289,8 @@ FMM at the field tolerance.
 """
 function volume_field_potential(f::PrecomputedVolumeField{T}, targets::AbstractMatrix{<:Real}) where {T}
     size(targets, 1) == 3 || throw(ArgumentError("targets must have shape (3, n)"))
-    f.coeff === nothing && throw(ArgumentError("field was built with compute_pot = false"))
+    (f.coeff === nothing && f.pot_grid === nothing) &&
+        throw(ArgumentError("field was built with compute_pot = false"))
     trg = Matrix{T}(targets)
     n = size(trg, 2)
     out = Vector{T}(undef, n)
@@ -124,7 +298,9 @@ function volume_field_potential(f::PrecomputedVolumeField{T}, targets::AbstractM
     bidx = findall(inb); oidx = findall(!, inb)
     if !isempty(bidx)
         txn, tyn, tzn = _field_scaled_targets(f, trg, bidx)
-        vals = TKM3D._finufft_type2_eval_3d(txn, tyn, tzn, 1, f.tol, f.coeff)
+        vals = f.pot_grid !== nothing ?
+            vec(_field_interponly_type2(f, txn, tyn, tzn, f.pot_grid)) :
+            TKM3D._finufft_type2_eval_3d(txn, tyn, tzn, 1, f.tol, f.coeff)
         for (k, i) in enumerate(bidx)
             out[i] = f.prefactor * real(vals[k])
         end
@@ -147,7 +323,8 @@ FMM at the field tolerance.
 """
 function volume_field_gradient(f::PrecomputedVolumeField{T}, targets::AbstractMatrix{<:Real}) where {T}
     size(targets, 1) == 3 || throw(ArgumentError("targets must have shape (3, n)"))
-    f.grad_coeff === nothing && throw(ArgumentError("field was built with compute_grad = false"))
+    (f.grad_coeff === nothing && f.grad_grid === nothing) &&
+        throw(ArgumentError("field was built with compute_grad = false"))
     trg = Matrix{T}(targets)
     n = size(trg, 2)
     out = Matrix{T}(undef, 3, n)
@@ -155,7 +332,9 @@ function volume_field_gradient(f::PrecomputedVolumeField{T}, targets::AbstractMa
     bidx = findall(inb); oidx = findall(!, inb)
     if !isempty(bidx)
         txn, tyn, tzn = _field_scaled_targets(f, trg, bidx)
-        vals = TKM3D._finufft_type2_eval_3d(txn, tyn, tzn, 1, f.tol, f.grad_coeff)
+        vals = f.grad_grid !== nothing ?
+            _field_interponly_type2(f, txn, tyn, tzn, f.grad_grid) :
+            TKM3D._finufft_type2_eval_3d(txn, tyn, tzn, 1, f.tol, f.grad_coeff)
         for (k, i) in enumerate(bidx)
             out[1, i] = f.prefactor * real(vals[k, 1])
             out[2, i] = f.prefactor * real(vals[k, 2])

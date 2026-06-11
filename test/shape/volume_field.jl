@@ -137,6 +137,50 @@ end
     @test maximum(abs, rhs_f .- rhs_h) <= 5e-4 * maximum(abs, rhs_h)
 end
 
+@testset "cache_fft mode matches standard spectral path" begin
+    gsrc = BoundaryIntegral.GaussianVolumeSource((0.0, 0.0, 0.0), 0.3, 12, 1e-6)
+    f0 = PrecomputedVolumeField(gsrc; tol = 1e-6)
+    f1 = PrecomputedVolumeField(gsrc; tol = 1e-6, cache_fft = true)
+
+    # cached mode drops the coefficient arrays and stores fine grids instead
+    @test f1.coeff === nothing && f1.grad_coeff === nothing
+    @test f1.pot_grid !== nothing && f1.grad_grid !== nothing
+    @test size(f1.pot_grid) == f1.nfdim
+    @test size(f1.grad_grid) == (f1.nfdim..., 3)
+
+    # mixed batch: 200 quasi-random in-box targets (interp-only vs standard
+    # type-2) + 4 out-of-box targets (FMM in both modes — identical path)
+    nin = 200
+    targets = Matrix{Float64}(undef, 3, nin + 4)
+    alphas = (sqrt(2) - 1, sqrt(3) - 1, sqrt(5) - 2)   # deterministic low-discrepancy fill
+    for d in 1:3
+        targets[d, 1:nin] .= f0.lo[d] .+ mod.(alphas[d] .* (1:nin), 1.0) .* (f0.hi[d] - f0.lo[d])
+    end
+    targets[:, nin + 1:end] .= [3.0  0.0  -3.0  4.0;
+                                0.0  3.5   2.0  4.0;
+                                0.0  1.0  -2.0  4.0]
+    @test count(i -> BoundaryIntegral.in_field_box(f0, targets, i), 1:(nin + 4)) == nin
+
+    pot0 = volume_field_potential(f0, targets)
+    pot1 = volume_field_potential(f1, targets)
+    grad0 = volume_field_gradient(f0, targets)
+    grad1 = volume_field_gradient(f1, targets)
+
+    # elementwise agreement relative to the field scale (stricter than vector-norm isapprox)
+    @test maximum(abs, pot1 .- pot0) <= 1e-6 * maximum(abs, pot0)
+    @test maximum(abs, grad1 .- grad0) <= 1e-6 * maximum(abs, grad0)
+
+    # partial-construction guards behave the same in cached mode
+    fg = PrecomputedVolumeField(gsrc; tol = 1e-6, compute_pot = false, cache_fft = true)
+    @test fg.pot_grid === nothing && fg.grad_grid !== nothing
+    @test_throws ArgumentError volume_field_potential(fg, targets)
+    @test maximum(abs, volume_field_gradient(fg, targets) .- grad0) <= 1e-6 * maximum(abs, grad0)
+    fp = PrecomputedVolumeField(gsrc; tol = 1e-6, compute_grad = false, cache_fft = true)
+    @test fp.pot_grid !== nothing && fp.grad_grid === nothing
+    @test_throws ArgumentError volume_field_gradient(fp, targets)
+    @test maximum(abs, volume_field_potential(fp, targets) .- pot0) <= 1e-6 * maximum(abs, pot0)
+end
+
 @testset "adaptive builder: field overload reproduces VolumeSource path" begin
     gsrc = BoundaryIntegral.GaussianVolumeSource((0.0, 0.0, 0.0), 0.3, 12, 1e-6)
     field = PrecomputedVolumeField(gsrc; tol = 1e-4, compute_pot = false)
