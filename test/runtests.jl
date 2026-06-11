@@ -11,7 +11,6 @@ using Test
     include("utils/barycentric.jl")
     include("utils/quad_order.jl")
     include("utils/best_grid.jl")
-
     # visualization helpers
     include("visualization/extensions.jl")
 
@@ -36,6 +35,22 @@ using Test
 
     # multi-box 3d
     include("shape/multi_box3d.jl")
+
+    # multi-rhs solver
+    include("solver/multi_rhs.jl")
+    include("solver/multi_rhs_vector.jl")
+    include("solver/lattice_batch.jl")
+    include("solver/batch_io.jl")
+
+    # campaign
+    include("campaign/toml_input.jl")
+    include("campaign/geometry.jl")
+    include("campaign/manifest.jl")
+    include("campaign/v_output.jl")
+    if run_full
+        include("campaign/pipeline.jl")
+        include("campaign/distributed_ext.jl")
+    end
 
     # solver functions
     if run_full

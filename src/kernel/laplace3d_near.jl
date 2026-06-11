@@ -231,7 +231,7 @@ function build_neighbor_list(
     atol::T;
     distance_only::Bool = false,
     range_factor::T = T(5),
-    correct_edges::Bool = true,
+    correct_edges::Bool = false,
     adaptive_cfg::AdaptiveConfig = AdaptiveConfig(atol = Float64(atol)),
 ) where {P <: AbstractPanel, T}
     upsample = Dict{Tuple{Int, Int}, Int}()
@@ -379,7 +379,7 @@ function laplace3d_DT_fmm3d_corrected(
     up_tol::Float64,
     max_order::Int;
     range_factor::Float64 = 5.0,
-    correct_edges::Bool = true,
+    correct_edges::Bool = false,
     adaptive_atol::Float64 = up_tol,
     adaptive_rtol::Float64 = sqrt(eps(Float64)),
     adaptive_n_GL::Int = 0,
@@ -407,7 +407,7 @@ function laplace3d_D_fmm3d_corrected(
     up_tol::Float64,
     max_order::Int;
     range_factor::Float64 = 5.0,
-    correct_edges::Bool = true,
+    correct_edges::Bool = false,
     adaptive_atol::Float64 = up_tol,
     adaptive_rtol::Float64 = sqrt(eps(Float64)),
     adaptive_n_GL::Int = 0,

@@ -161,6 +161,89 @@ function VolumeSource(datagrid; shift::NTuple{3,<:Real}=(0.0, 0.0, 0.0), tol::Re
     return VolumeSource(axes, weights, density, origin, basis; tol = T(tol))
 end
 
+"""
+    density_centroid(datagrid)
+
+Charge centroid sum(r*|phi|^2)/sum(|phi|^2) over the grid — the standard Wannier center.
+Assumes the function does not wrap the supercell boundary (interior-localized).
+"""
+function density_centroid(datagrid)
+    nx, ny, nz = datagrid.nx, datagrid.ny, datagrid.nz
+    sx = sy = sz = 0.0
+    sw = 0.0
+    for ix in 1:nx, iy in 1:ny, iz in 1:nz
+        w = abs2(datagrid.values[ix, iy, iz])
+        p = grid_point(datagrid, ix, iy, iz)
+        sx += w * p[1]; sy += w * p[2]; sz += w * p[3]; sw += w
+    end
+    sw > 0 || error("density_centroid: density has zero total weight")
+    return (sx / sw, sy / sw, sz / sw)
+end
+
+"""
+    _lattice_grid_shift(datagrid, primvec, (n1,n2,n3)) -> NTuple{3,Int}
+
+Integer `circshift` amounts for translating a density by `n1·a1 + n2·a2 + n3·a3`, where the
+datagrid spanning vectors (true cell) are integer multiples of the primitive lattice vectors
+`a_d = primvec[d,:]` along each grid axis. Errors if a lattice vector is not commensurate with
+the grid (i.e. grid-steps-per-lattice-vector is not an integer).
+"""
+function _lattice_grid_shift(datagrid, primvec::AbstractMatrix, n::NTuple{3,Int})
+    At, Bt, Ct = true_cell_vectors(datagrid)
+    span = (At, Bt, Ct)
+    dims = (datagrid.nx, datagrid.ny, datagrid.nz)
+    return ntuple(3) do d
+        mult = norm(span[d]) / norm(primvec[d, :])      # supercell multiplicity along grid axis d
+        sd = dims[d] / mult                             # grid steps per primitive lattice vector
+        isapprox(sd, round(sd); rtol = 1e-4) ||
+            error("lattice axis $d not commensurate with grid: $sd steps per a$d")
+        round(Int, sd) * n[d]
+    end
+end
+
+"""
+    lattice_shifted_datagrid(datagrid, primvec, (n1,n2,n3))
+
+Return a copy of `datagrid` with its density translated by the lattice vector
+`n1·a1 + n2·a2 + n3·a3` via an exact integer `circshift` (same grid; periodic).
+"""
+function lattice_shifted_datagrid(datagrid, primvec::AbstractMatrix, n::NTuple{3,Int})
+    n == (0, 0, 0) && return datagrid
+    shift = _lattice_grid_shift(datagrid, primvec, n)
+    return merge(datagrid, (; values = circshift(datagrid.values, shift)))
+end
+
+function datagrids_compatible(a, b; tol = 1e-10)
+    a.nx == b.nx && a.ny == b.ny && a.nz == b.nz || return false
+    maximum(abs.(a.origin .- b.origin)) <= tol &&
+        maximum(abs.(a.A .- b.A)) <= tol &&
+        maximum(abs.(a.B .- b.B)) <= tol &&
+        maximum(abs.(a.C .- b.C)) <= tol
+end
+
+# Build a VolumeSource on `datagrid`'s grid using an externally supplied density array
+# (e.g. a pointwise product of two orbitals).
+function VolumeSource(datagrid, density::AbstractArray{<:Real,3};
+                      shift::NTuple{3,<:Real} = (0.0, 0.0, 0.0), tol::Real = 0.0)
+    nx, ny, nz = datagrid.nx, datagrid.ny, datagrid.nz
+    size(density) == (nx, ny, nz) ||
+        throw(ArgumentError("density size $(size(density)) != grid ($nx,$ny,$nz)"))
+    T = Float64
+    axes = (collect(T((i - 1) / nx) for i in 1:nx),
+            collect(T((j - 1) / ny) for j in 1:ny),
+            collect(T((k - 1) / nz) for k in 1:nz))
+    At, Bt, Ct = true_cell_vectors(datagrid)
+    basis = ((At[1], At[2], At[3]), (Bt[1], Bt[2], Bt[3]), (Ct[1], Ct[2], Ct[3]))
+    # Match the weight convention of VolumeSource(datagrid) exactly (true cell vectors),
+    # so a pair density integrates identically to a single-orbital density.
+    jac = abs(det(hcat(collect(At), collect(Bt), collect(Ct))))
+    weights = fill(jac / (nx * ny * nz), nx, ny, nz)
+    dens = Array{T,3}(density)
+    shift_f = (Float64(shift[1]), Float64(shift[2]), Float64(shift[3]))
+    origin = (datagrid.origin[1], datagrid.origin[2], datagrid.origin[3]) .+ shift_f
+    return VolumeSource(axes, weights, dens, origin, basis; tol = T(tol))
+end
+
 function _datagrid_affine(datagrid)
     o = datagrid.origin
     At, Bt, Ct = true_cell_vectors(datagrid)

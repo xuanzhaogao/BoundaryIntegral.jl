@@ -1,0 +1,39 @@
+name = "system_small"
+root = "/tmp/system_small_unused"
+templates = ["orb_a.xsf", "orb_b.xsf"]
+
+[[orbital]]
+type = 1
+x = 1.0
+y = 1.0
+z = 1.0
+
+[[orbital]]
+type = 2
+x = 5.0
+y = 1.0
+z = 1.0
+
+[pairing]
+neighbor_cutoff = 3.0
+
+[dielectrics]
+eps_out = 1.0
+boxes = [[0.0, 0.0, 0.0, 4.0, 4.0, 4.0, 11.7]]
+
+[solve]
+n_quad = 4
+l_ec = 2.0
+rhs_tol = 1e-2
+lhs_tol = 1e-6
+gmres_rtol = 1e-8
+support_rtol = 1e-6
+volume_tol = 1e-6
+max_order = 8
+max_depth = 128
+
+[batching]
+n_centers_per_batch = 1
+
+[eval]
+far_pad_steps = 2.0

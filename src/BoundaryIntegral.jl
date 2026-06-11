@@ -2,10 +2,12 @@ module BoundaryIntegral
 
 using LinearAlgebra
 using SparseArrays, StaticArrays
+using Serialization
 using FastGaussQuadrature, LegendrePolynomials, SpecialFunctions
 using Krylov, LinearMaps, HCubature
 using NearestNeighbors
 using ForwardDiff
+using TOML
 
 using FMM2D, FMM3D
 using TKM3D
@@ -52,6 +54,34 @@ export Rhs_dielectric_box3d, Rhs_dielectric_box3d_fmm3d, Rhs_dielectric_box3d_hy
 # linear algebra
 export solve_lu, solve_gmres
 
+export density_centroid
+
+# multi-rhs solver
+export pair_density_source
+export batched_lhs_dielectric_box3d_fmm3d_corrected, BatchedDielectricOperator
+export solve_dielectric_box3d_block
+export four_index_matrix
+
+# lattice batch
+export lattice_grid_steps, OrbitalInstance
+export LatticeBatch, assemble_lattice_batch
+export batch_volume_sources, solve_dielectric_lattice_batch
+export evaluate_batch_potential
+
+# batch IO
+export BatchResult, save_batch_result, load_batch_result, is_complete_batch
+
+# campaign
+export CampaignInput, OrbitalSpec, load_campaign
+export manifest_path, centers_path, targets_path, rho_store_path, logs_dir, batch_path, v_path
+export snap_orbital
+export CenterInfo, BatchSpec, enumerate_centers, enumerate_pairs, build_batches
+export write_centers, read_centers, write_manifest, read_manifest
+export prepare, solve_batch, consolidate, eval_batch, assemble_v, pending_batches
+export four_index_integrals
+export run_phase
+export write_v_table
+
 # visualization
 export viz_2d, viz_3d
 export viz_3d_surface
@@ -91,6 +121,16 @@ include("utils/xsf_reader.jl")
 # # solvers
 include("solver/dielectric_box2d.jl")
 include("solver/dielectric_box3d.jl")
+include("solver/multi_rhs.jl")
+include("solver/lattice_batch.jl")
+include("solver/batch_io.jl")
+
+# # campaign
+include("campaign/toml_input.jl")
+include("campaign/geometry.jl")
+include("campaign/manifest.jl")
+include("campaign/tasks.jl")
+include("campaign/v_output.jl")
 
 # # visualization
 include("visualization/viz_2d.jl")
