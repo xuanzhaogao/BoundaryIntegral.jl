@@ -184,3 +184,28 @@ function volume_field_gradient(f::PrecomputedVolumeField{T}, targets::AbstractMa
     _direct_gradient!(out, f.sources, f.charges, trg, oidx)
     return out
 end
+
+"""
+    _rhs_volume_targets_field(field, targets, normals, eps_src) -> Vector
+
+Dielectric-interface RHS values `-(n · ∇φ) / eps_src` at `targets` from a
+precomputed field (free-space normalization, matching the TKM branch of
+`_rhs_volume_targets_hybrid`). Replaces the per-call KDTree classify +
+lfmm3d/ltkm3dc pair with one field evaluation.
+"""
+function _rhs_volume_targets_field(
+    field::PrecomputedVolumeField{T},
+    targets::Matrix{T},
+    normals::Matrix{T},
+    eps_src::T,
+) where {T}
+    n = size(targets, 2)
+    @assert size(normals, 2) == n
+    grad = volume_field_gradient(field, targets)
+    rhs_vals = Vector{T}(undef, n)
+    @inbounds for i in 1:n
+        rhs_vals[i] = -(normals[1, i] * grad[1, i] + normals[2, i] * grad[2, i] +
+                        normals[3, i] * grad[3, i]) / eps_src
+    end
+    return rhs_vals
+end

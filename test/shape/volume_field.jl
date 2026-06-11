@@ -90,3 +90,29 @@ end
     @test isapprox(volume_field_gradient(fg, targets), grad; rtol = 1e-12)
     @test isapprox(volume_field_potential(fp, targets), pot; rtol = 1e-12)
 end
+
+@testset "_rhs_volume_targets_field vs hybrid" begin
+    gsrc = BoundaryIntegral.GaussianVolumeSource((0.0, 0.0, 0.0), 0.3, 12, 1e-6)
+    field = PrecomputedVolumeField(gsrc; tol = 1e-6, compute_pot = false)
+    src, q = BoundaryIntegral._volume_source_fmm_sources(gsrc)
+    h = BoundaryIntegral._estimate_source_spacing(gsrc)
+    kmax = BoundaryIntegral._estimate_tkm3dc_kmax(h)
+
+    targets = [0.05  0.2  -0.15  3.0  -3.0  4.0;
+               0.0  -0.1   0.05  0.0   2.0  4.0;
+               0.0   0.1  -0.1   0.0  -2.0  4.0]
+    normals = [1.0  0.0  0.0  0.0  1.0  0.0;
+               0.0  1.0  0.0  0.0  0.0  1.0;
+               0.0  0.0  1.0  1.0  0.0  0.0]
+
+    rhs_field = BoundaryIntegral._rhs_volume_targets_field(field, targets, normals, 1.0)
+
+    is_near = BoundaryIntegral._classify_near_far_targets(targets, gsrc, h)
+    rhs_hyb, _, _ = BoundaryIntegral._rhs_volume_targets_hybrid(
+        src, q, targets, normals, 1.0, 1e-6, kmax, is_near)
+
+    scale = maximum(abs, rhs_hyb)
+    for i in 1:6
+        @test abs(rhs_field[i] - rhs_hyb[i]) <= 1e-4 * scale
+    end
+end
