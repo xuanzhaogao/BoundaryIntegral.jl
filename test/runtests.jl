@@ -46,6 +46,7 @@ using Test
 
     # campaign
     include("campaign/toml_input.jl")
+    include("campaign/geometry.jl")
 
     # solver functions
     if run_full
