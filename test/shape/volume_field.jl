@@ -123,7 +123,7 @@ end
     end
 end
 
-@testset "adaptive builder: field overload reproduces vs path" begin
+@testset "adaptive builder: field overload reproduces VolumeSource path" begin
     gsrc = BoundaryIntegral.GaussianVolumeSource((0.0, 0.0, 0.0), 0.3, 12, 1e-6)
     field = PrecomputedVolumeField(gsrc; tol = 1e-4, compute_pot = false)
 
@@ -135,7 +135,6 @@ end
     @test length(iface_f.panels) == length(iface_vs.panels)
     @test BoundaryIntegral.num_points(iface_f) == BoundaryIntegral.num_points(iface_vs)
     # identical refinement path => identical panel geometry
-    c_vs = sort([sum(p.corners[1]) + 3 * sum(p.corners[3]) for p in iface_vs.panels])
-    c_f  = sort([sum(p.corners[1]) + 3 * sum(p.corners[3]) for p in iface_f.panels])
-    @test isapprox(c_vs, c_f; rtol = 1e-12)
+    corner_key(iface) = sort([(p.corners[1]..., p.corners[3]...) for p in iface.panels])
+    @test corner_key(iface_f) == corner_key(iface_vs)
 end

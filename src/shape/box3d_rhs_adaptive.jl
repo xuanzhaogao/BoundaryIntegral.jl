@@ -512,6 +512,7 @@ end
 # --- PrecomputedVolumeField path: same refinement logic, but the per-depth
 # --- RHS evaluation uses the stored spectral field (no per-call type-1
 # --- NUFFT / FFT replanning / KDTree classify / FMM setup).
+# NOTE: deliberate mirror of the VolumeSource overload above (production path kept untouched on this branch); keep the two in sync — candidate for a shared core later.
 
 function _rhs_panel3d_resolved_volume_field(
     panels::Vector{TempPanel3D{T}},
@@ -520,7 +521,7 @@ function _rhs_panel3d_resolved_volume_field(
     ns::Vector{T},
     ws::Vector{T},
     atol::T,
-) where {T}
+) where T
     n_panels = length(panels)
     if n_panels == 0
         return Bool[]
@@ -533,8 +534,9 @@ function _rhs_panel3d_resolved_volume_field(
     ys = range(-one(T), one(T); length = n_pts)
     targets, normals, n_per_panel = _rhs_panel3d_refinement_targets(panels, ns, ws; n_pts = n_pts)
 
-    rhs_vals = _rhs_volume_targets_field(field, targets, normals, eps_src)
     @info "    rhs panel field evaluation, targets: $(size(targets, 2))"
+    rhs_vals = _rhs_volume_targets_field(field, targets, normals, eps_src)
+    @assert length(rhs_vals) == n_panels * n_per_panel
 
     idx = 0
     for p in 1:n_panels
@@ -579,10 +581,11 @@ function single_dielectric_box3d_rhs_adaptive(
     ::Type{T} = Float64;
     max_depth::Int = 128,
     alpha::T = sqrt(T(2)),
-) where {T}
+) where T
     ns, ws = gausslegendre(n_quad)
     @info "box3d volume field rhs adaptive panel generation, source points: $(length(field.charges))"
 
+    # rhs refinement
     solved = TempPanel3D{T}[]
     unsolved = _box3d_rhs_adaptive_initial_panels(Lx, Ly, Lz, alpha)
     depth = 0
@@ -603,6 +606,7 @@ function single_dielectric_box3d_rhs_adaptive(
     end
     append!(solved, unsolved)
 
+    # edge and corner refinement
     rough_ec = copy(solved)
     refined = TempPanel3D{T}[]
     while !isempty(rough_ec)
@@ -618,6 +622,7 @@ function single_dielectric_box3d_rhs_adaptive(
         end
     end
 
+    # add tensor product gl points to panels
     panels = Vector{FlatPanel{T, 3}}()
     for tpl in refined
         is_edge = tpl.is_ab_edge || tpl.is_bc_edge || tpl.is_cd_edge || tpl.is_da_edge ||
