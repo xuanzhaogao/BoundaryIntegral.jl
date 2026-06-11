@@ -19,27 +19,24 @@ function _spawn(workers::Int)
 end
 
 function BoundaryIntegral.run_phase(c::BoundaryIntegral.CampaignInput, phase::Symbol; workers::Int = 0)
-    runner = phase === :solve ? BoundaryIntegral.solve_batch :
-             phase === :eval  ? BoundaryIntegral.eval_batch  :
-             error("run_phase: phase must be :solve or :eval")
+    phase in (:solve, :eval) || error("run_phase: phase must be :solve or :eval")
     _spawn(workers)
     @everywhere eval(:(using BoundaryIntegral))
+    # workers buffer non-TTY stdio (Julia 1.12) — flush periodically so their progress
+    # output reaches the master/log live ( @everywhere ships an AST, not a closure ✓ )
+    @everywhere Timer(_ -> (flush(stdout); flush(stderr)), 2; interval = 2)
     pending = pending_batches(c, phase)
-    toml = c.toml_path                         # workers reload from the .toml path (cheap, cached)
-    results = pmap(pending; retry_delays = [30.0], on_error = e -> e) do id
-        try
-            runner(BoundaryIntegral.load_campaign(toml), id)
-            (id, :ok)
-        catch err
-            cc = BoundaryIntegral.load_campaign(toml)
-            mkpath(logs_dir(cc))
-            write(joinpath(logs_dir(cc), "$(phase)_batch_$(lpad(id, 4, '0')).err"),
-                  sprint(showerror, err, catch_backtrace()))
-            rethrow()
-        end
-    end
+    @info "run_phase: dispatching" phase npending=length(pending) nworkers=nworkers()
+    flush(stderr); flush(stdout)
+    # Only core-package objects may cross the wire: workers never load this extension, so
+    # an ext-owned closure deserialization-fails there and wedges pmap (see PhaseRunner).
+    # That includes on_error — pmap wraps it INTO the function it ships (wrap_on_error
+    # runs before remote() in pmap), so it must be a named non-ext function: identity.
+    results = pmap(BoundaryIntegral.PhaseRunner(c.toml_path, phase), pending;
+                   retry_delays = [30.0], on_error = identity)
     ok = count(r -> r isa Tuple && r[2] === :ok, results)
     @info "run_phase finished" phase ok failed=length(results)-ok
+    flush(stderr); flush(stdout)
     return results
 end
 

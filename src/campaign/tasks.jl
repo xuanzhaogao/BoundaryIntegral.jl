@@ -447,3 +447,34 @@ Parallel driver for `:solve`/`:eval` over `pending_batches`. Implemented by the
 Without the extension loaded, this errors with a hint.
 """
 function run_phase end
+
+"""
+    PhaseRunner(toml_path, phase)
+
+Callable mapped over pending batch ids by `run_phase`. Lives in the core package —
+not the Distributed extension — because `pmap` serializes its function to workers,
+and workers load only `BoundaryIntegral` (never the extension, which needs
+SlurmClusterManager). An extension-owned closure cannot be deserialized there: the
+worker hits `KeyError: PkgId(... BoundaryIntegralDistributedExt) not found`, the
+failure wedges the message stream, and `pmap` waits forever.
+"""
+struct PhaseRunner
+    toml::String
+    phase::Symbol
+end
+
+function (r::PhaseRunner)(id::Integer)
+    runner = r.phase === :solve ? solve_batch :
+             r.phase === :eval  ? eval_batch  :
+             error("PhaseRunner: phase must be :solve or :eval")
+    try
+        runner(load_campaign(r.toml), id)
+        return (id, :ok)
+    catch err
+        c = load_campaign(r.toml)
+        mkpath(logs_dir(c))
+        write(joinpath(logs_dir(c), "$(r.phase)_batch_$(lpad(id, 4, '0')).err"),
+              sprint(showerror, err, catch_backtrace()))
+        rethrow()
+    end
+end
