@@ -20,6 +20,8 @@ export interface_approx
 export interface_uniform_samples
 
 export PointSource, VolumeSource
+export PrecomputedVolumeField, volume_field_potential, volume_field_gradient,
+       rhs_dielectric_box3d_field
 export screened_volume_source
 export SharpScreening, SoftMixPermittivity, SoftMixInversePermittivity
 
@@ -105,6 +107,7 @@ include("shape/box2d.jl")
 include("shape/box3d.jl") # core types and geometry
 include("shape/box3d_single.jl") # single-box builder
 include("shape/box3d_fmm_helpers.jl") # FMM/TKM helpers (needed by rhs_adaptive)
+include("shape/volume_field.jl") # precomputed spectral volume field
 include("shape/box3d_rhs_adaptive.jl") # RHS-adaptive builders
 include("shape/box3d_multi.jl") # multi-box builders
 
