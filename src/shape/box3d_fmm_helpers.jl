@@ -11,6 +11,25 @@ function _volume_source_fmm_sources(vs::VolumeSource{T, 3}) where T
     return sources, charges
 end
 
+# Extract the quadrature-point coordinates and outward normals of every point on
+# an interface as two 3 x num_points matrices (points used as evaluation targets,
+# no quadrature weights). Shared by the rhs_dielectric_box3d_{fmm3d,hybrid,field}
+# assemblers, which all consume targets+normals in this layout.
+function _interface_targets_normals(interface::DielectricInterface{P, T}) where {P <: AbstractPanel, T}
+    n_points = num_points(interface)
+    targets = Matrix{T}(undef, 3, n_points)
+    normals = Matrix{T}(undef, 3, n_points)
+    for (i, point) in enumerate(eachpoint(interface))
+        targets[1, i] = point.panel_point.point[1]
+        targets[2, i] = point.panel_point.point[2]
+        targets[3, i] = point.panel_point.point[3]
+        normals[1, i] = point.panel_point.normal[1]
+        normals[2, i] = point.panel_point.normal[2]
+        normals[3, i] = point.panel_point.normal[3]
+    end
+    return targets, normals
+end
+
 function _box3d_rhs_adaptive_initial_panels(Lx::T, Ly::T, Lz::T, alpha::T) where T
     vertices, faces, normals = _box3d_geometry(Lx, Ly, Lz)
 
