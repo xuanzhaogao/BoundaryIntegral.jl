@@ -29,27 +29,6 @@ function _pair_density_array(dg_i, dg_j)
     return prod
 end
 
-# Flatten an (nx,ny,nz) grid array in the SAME order VolumeSource uses (ix outer, iz inner),
-# so a column built this way is consistent with VolumeSource positions/weights.
-function _flatten_grid_array(dg, A::AbstractArray{<:Real,3})
-    nx, ny, nz = dg.nx, dg.ny, dg.nz
-    v = Vector{Float64}(undef, nx * ny * nz)
-    idx = 0
-    @inbounds for ix in 1:nx, iy in 1:ny, iz in 1:nz
-        idx += 1
-        v[idx] = A[ix, iy, iz]
-    end
-    return v
-end
-
-# Read a datagrid once per path, caching it (the .xsf files are ~tens of MB each).
-function _cached_xsf_grid!(cache::AbstractDict, path::AbstractString)
-    haskey(cache, path) && return cache[path]
-    _, dg = read_xsf(path)
-    cache[path] = dg
-    return dg
-end
-
 function pair_density_source(xsf_i::AbstractString, xsf_j::AbstractString; tol::Real = 0.0)
     _, dg_i = read_xsf(xsf_i)
     xsf_i == xsf_j && return VolumeSource(dg_i, dg_i.values .* dg_i.values; tol = tol)
@@ -211,16 +190,7 @@ function rhs_dielectric_box3d_fmm3d(
     @inbounds for k in 1:K, s in 1:n
         charges[k, s] = screened[k].weights[s] * screened[k].density[s]
     end
-    targets = zeros(Float64, 3, n_points)
-    normals = zeros(Float64, 3, n_points)
-    for (i, point) in enumerate(eachpoint(interface))
-        targets[1, i] = point.panel_point.point[1]
-        targets[2, i] = point.panel_point.point[2]
-        targets[3, i] = point.panel_point.point[3]
-        normals[1, i] = point.panel_point.normal[1]
-        normals[2, i] = point.panel_point.normal[2]
-        normals[3, i] = point.panel_point.normal[3]
-    end
+    targets, normals = _interface_targets_normals(interface)
     vals = lfmm3d(thresh, sources, charges = charges, targets = targets, pgt = 2, nd = K)
     grad = reshape(vals.gradtarg, K, 3, n_points)
     F = Matrix{Float64}(undef, n_points, K)

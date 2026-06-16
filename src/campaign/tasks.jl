@@ -12,6 +12,16 @@ using Sockets
 _params_string(c::CampaignInput) =
     "norb=$(length(c.orbitals)) cutoff=$(c.neighbor_cutoff) n_per_batch=$(c.n_centers_per_batch) overrides=$(c.pair_overrides)"
 
+# Manifest derivation shared by `prepare` (file-based) and `four_index_integrals`
+# (in-memory): centers, neighbor pairs (or explicit overrides), and batches.
+function _centers_pairs_batches(c::CampaignInput)
+    centers = enumerate_centers(c)
+    pairs   = c.pair_overrides === nothing ?
+        enumerate_pairs(centers, c.neighbor_cutoff) : c.pair_overrides
+    batches = build_batches(pairs, c.n_centers_per_batch)
+    return centers, pairs, batches
+end
+
 # ---------------------------------------------------------------------------
 # prepare
 # ---------------------------------------------------------------------------
@@ -40,10 +50,7 @@ function prepare(c::CampaignInput)
         end
         return read_manifest(manifest_path(c))
     end
-    centers = enumerate_centers(c)
-    pairs   = c.pair_overrides === nothing ?
-        enumerate_pairs(centers, c.neighbor_cutoff) : c.pair_overrides
-    batches = build_batches(pairs, c.n_centers_per_batch)
+    centers, pairs, batches = _centers_pairs_batches(c)
     mkpath(c.root)
     write_centers(centers_path(c), centers)
     write_manifest(manifest_path(c), batches)
@@ -117,15 +124,45 @@ function _atomic_serialize(path::AbstractString, obj)
     mv(tmp, path; force = true)
 end
 
+# Atomic text write (tmp + rename); `writer` is called with the open IO. `writer` is the
+# first argument (like `open(f, path)`) so callers can use do-block syntax. Text analogue
+# of `_atomic_serialize` — shared by the V table and report so every atomic write uses
+# the same collision-safe pid+rand tmp name.
+function _atomic_write_text(writer, path::AbstractString)
+    d = dirname(path)
+    isempty(d) || mkpath(d)
+    tmp = string(path, ".tmp.", getpid(), "_", rand(UInt32))
+    open(writer, tmp, "w")
+    mv(tmp, path; force = true)
+    return path
+end
+
+# Cartesian coordinates (3 x length(gidx)) of integer grid points `gidx` on datagrid `dg`.
+function grid_positions(dg, gidx)
+    positions = Matrix{Float64}(undef, 3, length(gidx))
+    for (r, g) in enumerate(gidx)
+        p = grid_point(dg, g[1], g[2], g[3])
+        positions[1, r] = p[1]; positions[2, r] = p[2]; positions[3, r] = p[3]
+    end
+    return positions
+end
+
 # ---------------------------------------------------------------------------
 # _batch_instances helper
 # ---------------------------------------------------------------------------
 
+# OrbitalInstances needed by a batch: the unique orbital ids across the batch's pairs,
+# each from its center record. `byid` may come from disk (read_centers) or in-memory
+# (enumerate_centers) — both yield center records with .template_id and .steps.
+function _insts_for(byid::AbstractDict, spec::BatchSpec)
+    need = unique(reduce(vcat, [[p[1], p[2]] for p in spec.pairs]; init = Int[]))
+    return Dict(id => OrbitalInstance(id, byid[id].template_id, byid[id].steps) for id in need)
+end
+
 function _batch_instances(c::CampaignInput, spec::BatchSpec)
     centers = read_centers(centers_path(c))
     byid = Dict(ct.id => ct for ct in centers)
-    need = unique(reduce(vcat, [[p[1], p[2]] for p in spec.pairs]; init = Int[]))
-    return Dict(id => OrbitalInstance(id, byid[id].template_id, byid[id].steps) for id in need)
+    return _insts_for(byid, spec)
 end
 
 # ---------------------------------------------------------------------------
@@ -210,12 +247,7 @@ function consolidate_core(brs::Vector{BatchResult}, dg, c::CampaignInput)
     gidx = sort!(collect(gset))
     rowofg = Dict(g => r for (r, g) in enumerate(gidx))
 
-    positions = Matrix{Float64}(undef, 3, length(gidx))
-    for (r, g) in enumerate(gidx)
-        p = grid_point(dg, g[1], g[2], g[3])
-        positions[1, r] = p[1]; positions[2, r] = p[2]; positions[3, r] = p[3]
-    end
-    targets = (; gidx, positions)
+    targets = (; gidx, positions = grid_positions(dg, gidx))
 
     pair_ids = Tuple{Int,Int}[]
     t_idx    = Vector{Vector{Int}}()
@@ -273,11 +305,7 @@ against every stored pair density. Returns `(br.pair_ids, nP × K Matrix)`. No f
 """
 function eval_batch_core(br::BatchResult, targets, store, dg, c::CampaignInput)
     K = length(br.pair_ids)
-    pos = Matrix{Float64}(undef, 3, length(br.gidx))
-    for (r, g) in enumerate(br.gidx)
-        p = grid_point(dg, g[1], g[2], g[3])
-        pos[1, r] = p[1]; pos[2, r] = p[2]; pos[3, r] = p[3]
-    end
+    pos = grid_positions(dg, br.gidx)
     sources = [VolumeSource(copy(pos), copy(br.weights), br.densities[:, k]) for k in 1:K]
 
     At, Bt, Ct = true_cell_vectors(dg)
@@ -378,10 +406,7 @@ function assemble_v(c::CampaignInput)
         println(io, "max|V|: $scale")
         println(io, "max rel asymmetry |V - V'|/max|V|: $max_rel_asym")
     end
-    let rp  = joinpath(c.root, "report.txt")
-        tmp = string(rp, ".tmp.", getpid(), "_", rand(UInt32))
-        write(tmp, report); mv(tmp, rp; force = true)
-    end
+    _atomic_write_text(io -> print(io, report), joinpath(c.root, "report.txt"))
     @info "assemble_v: done" n max_rel_asym
     return (; max_rel_asym, n)
 end
@@ -397,22 +422,13 @@ Run the full four-index pipeline in memory (no files written).  Reuses the same
 `*_core` functions as the file-based phases to guarantee identical numerics.
 """
 function four_index_integrals(c::CampaignInput)
-    centers = enumerate_centers(c)
+    centers, _, batches = _centers_pairs_batches(c)
     byid    = Dict(ct.id => ct for ct in centers)
-    pairs   = c.pair_overrides === nothing ?
-        enumerate_pairs(centers, c.neighbor_cutoff) : c.pair_overrides
-    batches = build_batches(pairs, c.n_centers_per_batch)
     temps   = load_templates!(c)
     grids   = [t[2] for t in temps]
     dg      = grids[1]
 
-    # build the per-batch OrbitalInstance dicts directly from the in-memory centers
-    function _insts(spec)
-        need = unique(reduce(vcat, [[p[1], p[2]] for p in spec.pairs]; init = Int[]))
-        return Dict(id => OrbitalInstance(id, byid[id].template_id, byid[id].steps) for id in need)
-    end
-
-    brs = [solve_batch_core(c, spec, grids, _insts(spec)) for spec in batches]
+    brs = [solve_batch_core(c, spec, grids, _insts_for(byid, spec)) for spec in batches]
     targets, store = consolidate_core(brs, dg, c)
 
     pid = store.pair_ids

@@ -139,16 +139,7 @@ function rhs_dielectric_box3d_fmm3d(
     end
 
     n_points = num_points(interface)
-    targets = zeros(Float64, 3, n_points)
-    normals = zeros(Float64, 3, n_points)
-    for (i, point) in enumerate(eachpoint(interface))
-        targets[1, i] = point.panel_point.point[1]
-        targets[2, i] = point.panel_point.point[2]
-        targets[3, i] = point.panel_point.point[3]
-        normals[1, i] = point.panel_point.normal[1]
-        normals[2, i] = point.panel_point.normal[2]
-        normals[3, i] = point.panel_point.normal[3]
-    end
+    targets, normals = _interface_targets_normals(interface)
 
     vals = lfmm3d(thresh, sources, charges = charges, targets = targets, pgt = 2)
     grad = vals.gradtarg
@@ -183,16 +174,7 @@ function rhs_dielectric_box3d_hybrid(
 
     sources, charges = _volume_source_fmm_sources(vs)
 
-    targets = Matrix{Float64}(undef, 3, n_points)
-    normals = Matrix{Float64}(undef, 3, n_points)
-    for (i, point) in enumerate(eachpoint(interface))
-        targets[1, i] = point.panel_point.point[1]
-        targets[2, i] = point.panel_point.point[2]
-        targets[3, i] = point.panel_point.point[3]
-        normals[1, i] = point.panel_point.normal[1]
-        normals[2, i] = point.panel_point.normal[2]
-        normals[3, i] = point.panel_point.normal[3]
-    end
+    targets, normals = _interface_targets_normals(interface)
 
     h = _estimate_source_spacing(vs)
     resolved_tkm_kmax = isnothing(tkm_kmax) ? _estimate_tkm3dc_kmax(h) : tkm_kmax
@@ -219,8 +201,8 @@ const Rhs_dielectric_box3d_hybrid = rhs_dielectric_box3d_hybrid # backward compa
     rhs_dielectric_box3d_field(interface, field, eps_src) -> Vector
 
 Dielectric-interface RHS assembled from a `PrecomputedVolumeField`
-(in-box targets: type-2 NUFFT on stored coefficients; out-of-box: direct
-threaded summation). Drop-in alternative to `rhs_dielectric_box3d_hybrid`
+(in-box targets: type-2 NUFFT on stored coefficients; out-of-box: FMM at the
+field tolerance). Drop-in alternative to `rhs_dielectric_box3d_hybrid`
 when the same source density is used for many assemblies/evaluations.
 Returns the same sign convention as `rhs_dielectric_box3d` /
 `rhs_dielectric_box3d_fmm3d` (an internal negation is applied to match).
@@ -230,17 +212,7 @@ function rhs_dielectric_box3d_field(
     field::PrecomputedVolumeField{Float64},
     eps_src::Float64,
 ) where {P <: AbstractPanel}
-    n_points = num_points(interface)
-    targets = Matrix{Float64}(undef, 3, n_points)
-    normals = Matrix{Float64}(undef, 3, n_points)
-    for (i, point) in enumerate(eachpoint(interface))
-        targets[1, i] = point.panel_point.point[1]
-        targets[2, i] = point.panel_point.point[2]
-        targets[3, i] = point.panel_point.point[3]
-        normals[1, i] = point.panel_point.normal[1]
-        normals[2, i] = point.panel_point.normal[2]
-        normals[3, i] = point.panel_point.normal[3]
-    end
+    targets, normals = _interface_targets_normals(interface)
     # _rhs_volume_targets_field returns the same sign as _rhs_volume_targets_hybrid;
     # negate to match the sign convention of rhs_dielectric_box3d_hybrid (and
     # rhs_dielectric_box3d / rhs_dielectric_box3d_fmm3d).
