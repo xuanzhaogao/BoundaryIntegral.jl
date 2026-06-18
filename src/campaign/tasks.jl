@@ -402,18 +402,24 @@ function assemble_v(c::CampaignInput)
     max_rel_asym = maximum(abs.(V .- transpose(V))) / scale
     write_v_table(joinpath(c.root, "V_full.tsv"), pair_ids, V)
 
-    # eV-unit tensor (Hubbard-like normalization), matching the ScreenedOrbitalSolve.to_eV
-    # convention: V_eV[a,b] = V_raw[a,b] * 4π * E2 / (Na * Nb), with E2 = e^2/(4πε0) =
-    # 14.3996 eV·Å and Na = ∫ρ_a = sum(store.tw[a]) the pair-density norm. Stored as the
-    # primary tensor in V_full_eV.jls; V_full.tsv keeps the raw (1/4π-kernel) values.
+    # eV-unit tensor: V_eV[a,b] = V_raw[a,b] * 4π * E2 / (‖φ_i‖‖φ_j‖ · ‖φ_k‖‖φ_l‖), where
+    # pair a=(i,j), b=(k,l), E2 = e^2/(4πε0) = 14.3996 eV·Å, and ‖φ_i‖² = ∫φ_i² is the orbital
+    # norm taken from the onsite pair (i,i) density norm (sum(store.tw)). NOTE: normalize by the
+    # ORBITAL norms, NOT the per-pair density norm ∫ρ_ij — the latter is the orbital OVERLAP,
+    # which →0 (and can be negative) for distant pairs and blows up the off-diagonal eV values.
     E2 = 14.3996
-    Na = [sum(store.tw[a]) for a in 1:n]
+    orbn2 = Dict{Int,Float64}()
+    for (a, p) in enumerate(pair_ids); p[1] == p[2] && (orbn2[p[1]] = sum(store.tw[a])); end
+    all(haskey(orbn2, p[1]) && haskey(orbn2, p[2]) for p in pair_ids) ||
+        error("assemble_v: eV normalization needs an onsite (i,i) pair for every orbital")
+    nrm = [sqrt(orbn2[p[1]] * orbn2[p[2]]) for p in pair_ids]   # ‖φ_i‖‖φ_j‖ for pair (i,j)
     V_eV = Matrix{Float64}(undef, n, n)
     for a in 1:n, bb in 1:n
-        V_eV[a, bb] = V[a, bb] * 4π * E2 / (Na[a] * Na[bb])
+        V_eV[a, bb] = V[a, bb] * 4π * E2 / (nrm[a] * nrm[bb])
     end
     _atomic_serialize(joinpath(c.root, "V_full_eV.jls"),
-        (; pair_ids = pair_ids, V = V_eV, norms = Na, unit = "eV", E2_eV_Ang = E2))
+        (; pair_ids = pair_ids, V = V_eV, orbital_norms = orbn2, unit = "eV",
+           E2_eV_Ang = E2, normalization = "orbital"))
     write_v_table(joinpath(c.root, "V_full_eV.tsv"), pair_ids, V_eV)
 
     report = sprint() do io
