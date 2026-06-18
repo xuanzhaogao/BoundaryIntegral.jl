@@ -168,12 +168,20 @@ single `nd = K` batched FMM is used; otherwise the per-source method is looped.
 function rhs_dielectric_box3d_fmm3d(
     interface::DielectricInterface{P, Float64},
     vss::Vector{<:VolumeSource{Float64, 3}},
-    thresh::Float64,
+    thresh::Float64;
+    screen_boxes::Union{Nothing, Vector{<:NamedTuple}} = nothing,
+    screen_epses::Union{Nothing, Vector{Float64}} = nothing,
+    screen_eps_out::Float64 = 1.0,
 ) where {P <: FlatPanel{Float64, 3}}
     n_points = num_points(interface)
     K = length(vss)
     K == 0 && return zeros(Float64, n_points, 0)
-    screened = [screened_volume_source(interface, vs, SharpScreening()) for vs in vss]
+    # Default: interface-based screening (single eps region). With `screen_boxes` given,
+    # screen each source box-based (multi-region) — the interface may span several eps
+    # regions (e.g. a heterojunction substrate) where interface-based screening is undefined.
+    screened = screen_boxes === nothing ?
+        [screened_volume_source(interface, vs, SharpScreening()) for vs in vss] :
+        [screened_volume_source(screen_boxes, screen_epses, screen_eps_out, vs, SharpScreening()) for vs in vss]
 
     if !_sources_share_positions(screened)
         F = Matrix{Float64}(undef, n_points, K)
@@ -213,9 +221,13 @@ function solve_dielectric_box3d_block(
     vss::Vector{<:VolumeSource{Float64, 3}};
     fmm_tol::Float64 = 1e-9, up_tol::Float64 = 1e-9, max_order::Int = 8,
     rtol::Float64 = 1e-10, atol::Float64 = 0.0, itmax::Int = 500,
+    screen_boxes::Union{Nothing, Vector{<:NamedTuple}} = nothing,
+    screen_epses::Union{Nothing, Vector{Float64}} = nothing,
+    screen_eps_out::Float64 = 1.0,
 ) where {P <: FlatPanel{Float64, 3}}
     op = batched_lhs_dielectric_box3d_fmm3d_corrected(interface, fmm_tol, up_tol, max_order)
-    F = rhs_dielectric_box3d_fmm3d(interface, vss, fmm_tol)
+    F = rhs_dielectric_box3d_fmm3d(interface, vss, fmm_tol;
+        screen_boxes = screen_boxes, screen_epses = screen_epses, screen_eps_out = screen_eps_out)
     return Krylov.block_gmres(op, F; rtol = rtol, atol = atol, itmax = itmax)
 end
 

@@ -198,7 +198,10 @@ and is used without further scaling; the scattered layer potential is the output
 function evaluate_batch_potential(interface, Σ::AbstractMatrix,
         sources::Vector{<:VolumeSource{Float64, 3}}, targets::Matrix{Float64};
         lhs_tol::Float64, volume_tol::Float64, far_pad::Float64,
-        range_factor::Float64 = 5.0)
+        range_factor::Float64 = 5.0,
+        screen_boxes::Union{Nothing, Vector{<:NamedTuple}} = nothing,
+        screen_epses::Union{Nothing, Vector{Float64}} = nothing,
+        screen_eps_out::Float64 = 1.0)
     K = length(sources)
     nt = size(targets, 2)
     size(targets, 1) == 3 || throw(ArgumentError("targets must be 3 × n"))
@@ -210,8 +213,11 @@ function evaluate_batch_potential(interface, Σ::AbstractMatrix,
             throw(ArgumentError("evaluate_batch_potential requires all sources on identical grid points"))
     end
 
-    # hoist screening: one pass over all sources
-    screened = [screened_volume_source(interface, vs, SharpScreening()) for vs in sources]
+    # hoist screening: one pass over all sources. Default interface-based (single eps region);
+    # with `screen_boxes` given, screen box-based (multi-region heterojunction interface).
+    screened = screen_boxes === nothing ?
+        [screened_volume_source(interface, vs, SharpScreening()) for vs in sources] :
+        [screened_volume_source(screen_boxes, screen_epses, screen_eps_out, vs, SharpScreening()) for vs in sources]
 
     Φ = Matrix{Float64}(undef, nt, K)
 
@@ -288,8 +294,11 @@ function solve_dielectric_lattice_batch(boxes::Vector{BoxGeom}, epses::Vector{Fl
         n_quad, l_ec, boxes, epses, env, rhs_atol;
         eps_out = eps_out, max_depth = max_depth)
     sources = batch_volume_sources(b)
+    # box-based multi-region screening: the interface may span several eps regions
+    # (heterojunction substrate), where interface-based source screening is undefined.
     Σ, stats = solve_dielectric_box3d_block(interface, sources;
         fmm_tol = fmm_tol, up_tol = up_tol, max_order = max_order,
-        rtol = gmres_rtol, itmax = itmax)
+        rtol = gmres_rtol, itmax = itmax,
+        screen_boxes = boxes, screen_epses = epses, screen_eps_out = eps_out)
     return (; sigma = Σ, interface = interface, sources = sources, stats = stats)
 end

@@ -317,7 +317,8 @@ function eval_batch_core(br::BatchResult, targets, store, dg, c::CampaignInput)
     Φ = evaluate_batch_potential(br.interface, br.sigma, sources, targets.positions;
         lhs_tol   = c.solve["lhs_tol"],
         volume_tol = c.solve["volume_tol"],
-        far_pad    = far_pad)
+        far_pad    = far_pad,
+        screen_boxes = c.boxes, screen_epses = c.epses, screen_eps_out = c.eps_out)
 
     nP = length(store.pair_ids)
     V  = Matrix{Float64}(undef, nP, K)
@@ -400,15 +401,32 @@ function assemble_v(c::CampaignInput)
     scale        = maximum(abs.(V))
     max_rel_asym = maximum(abs.(V .- transpose(V))) / scale
     write_v_table(joinpath(c.root, "V_full.tsv"), pair_ids, V)
+
+    # eV-unit tensor (Hubbard-like normalization), matching the ScreenedOrbitalSolve.to_eV
+    # convention: V_eV[a,b] = V_raw[a,b] * 4π * E2 / (Na * Nb), with E2 = e^2/(4πε0) =
+    # 14.3996 eV·Å and Na = ∫ρ_a = sum(store.tw[a]) the pair-density norm. Stored as the
+    # primary tensor in V_full_eV.jls; V_full.tsv keeps the raw (1/4π-kernel) values.
+    E2 = 14.3996
+    Na = [sum(store.tw[a]) for a in 1:n]
+    V_eV = Matrix{Float64}(undef, n, n)
+    for a in 1:n, bb in 1:n
+        V_eV[a, bb] = V[a, bb] * 4π * E2 / (Na[a] * Na[bb])
+    end
+    _atomic_serialize(joinpath(c.root, "V_full_eV.jls"),
+        (; pair_ids = pair_ids, V = V_eV, norms = Na, unit = "eV", E2_eV_Ang = E2))
+    write_v_table(joinpath(c.root, "V_full_eV.tsv"), pair_ids, V_eV)
+
     report = sprint() do io
         println(io, "campaign: $(c.name)")
         println(io, "pairs: $n   batches: $(length(batches))")
-        println(io, "max|V|: $scale")
+        println(io, "max|V| (raw): $scale")
         println(io, "max rel asymmetry |V - V'|/max|V|: $max_rel_asym")
+        println(io, "max|V| (eV):  $(maximum(abs.(V_eV)))")
+        println(io, "onsite V[1,1] (eV): $(V_eV[1,1])")
     end
     _atomic_write_text(io -> print(io, report), joinpath(c.root, "report.txt"))
     @info "assemble_v: done" n max_rel_asym
-    return (; max_rel_asym, n)
+    return (; max_rel_asym, n, V_eV, pair_ids)
 end
 
 # ---------------------------------------------------------------------------
