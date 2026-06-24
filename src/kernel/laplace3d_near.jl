@@ -225,12 +225,16 @@ function _refined_interface_prolongation(
 end
 
 # neighbor list describes the pair of panels that are near each other and the order needed for evaluation
+# Build the near panel-pair list using the Bernstein-radius threshold
+# criterion. For a source panel Q=i and target panel P=j the pair is "near"
+# whenever ρ_min(P,Q) ≤ ρ⋆ = atol^{-1/(2p)}, where ρ_min is the minimum
+# panel-pair Bernstein radius over the target nodes of P (see bernstein.jl) and
+# p is the source order. Near pairs are upsampled to order
+# p_up = ⌈ -log(atol) / (2 log ρ_min) ⌉, clamped to [p, max_order].
 function build_neighbor_list(
     interface::DielectricInterface{P, T},
     max_order::Int,
     atol::T;
-    distance_only::Bool = false,
-    range_factor::T = T(5),
     correct_edges::Bool = false,
     adaptive_cfg::AdaptiveConfig = AdaptiveConfig(atol = Float64(atol)),
 ) where {P <: AbstractPanel, T}
@@ -287,11 +291,28 @@ function build_neighbor_list(
         corner_tree = KDTree(corners_mat)
     end
 
+    log_atol = log(atol)
+
     for (i, paneli) in enumerate(interface.panels)
         (!correct_edges && paneli.is_edge) && continue
         l_i = lengths[i]
         n_quad_i = n_quads[i]
-        r_i = range_factor * l_i / n_quad_i
+        # Bernstein threshold for this source order; the pair is near iff
+        # ρ_min ≤ ρ⋆.
+        rho_star_i = atol ^ (-one(T) / (2 * n_quad_i))
+        # Conservative candidate prefilter. With L = max half-length and the
+        # ρ⋆ Bernstein-ellipse semi-axes A⋆=(ρ⋆+1/ρ⋆)/2, B⋆=(ρ⋆-1/ρ⋆)/2, any
+        # target node with ρ ≤ ρ⋆ in this source's frame lies in the box
+        #   |x'| ≤ A⋆·L,  |y'| ≤ (1+B⋆)·L,  |z'| ≤ B⋆·L
+        # (a node may be near via one axis while offset along the perpendicular
+        # in-plane axis by up to (1+B⋆)·L), so it is within
+        # L·√(A⋆²+(1+B⋆)²+B⋆²) of the centre. A 1.05× margin covers numerical
+        # slack; the exact ρ_min test below does the actual classification.
+        L_half = l_i / 2
+        A_star = (rho_star_i + one(T) / rho_star_i) / 2
+        B_star = (rho_star_i - one(T) / rho_star_i) / 2
+        r_i = T(105) / 100 * L_half *
+              sqrt(A_star^2 + (one(T) + B_star)^2 + B_star^2)
         nearby = inrange(tree, centers[:, i], r_i)
 
         panel_dict = Dict{Int, Vector{Int}}()
@@ -339,33 +360,25 @@ function build_neighbor_list(
                 continue
             end
 
-            if distance_only
-                upsample[(i, j)] = n_quad_i
-            else
-                # find the closest point in panel j to panel i
-                points_j = panel_dict[j]
-                isempty(points_j) && continue
-                min_dist = Inf
-                min_point_id = 0
-                for point_id in points_j
-                    dist = norm(points[:, point_id] - centers[:, i])
-                    if dist < min_dist
-                        min_dist = dist
-                        min_point_id = point_id
-                    end
-                end
-
-                order_i = check_quad_order3d(paneli, (points[1, min_point_id], points[2, min_point_id], points[3, min_point_id]), atol, max_order)
-
-                if order_i > n_quad_i
-                    key = (i, j)
-                    if haskey(upsample, key)
-                        upsample[key] = max(upsample[key], order_i)
-                    else
-                        upsample[key] = order_i
-                    end
-                end
+            # Panel-pair Bernstein radius: minimum over the target nodes of
+            # panel j (mapped into source panel i's reference frame).
+            points_j = panel_dict[j]
+            isempty(points_j) && continue
+            rho_min = T(Inf)
+            for point_id in points_j
+                trg = (points[1, point_id], points[2, point_id], points[3, point_id])
+                rho = bernstein_rho_panel(paneli, trg)
+                rho < rho_min && (rho_min = rho)
             end
+
+            rho_min <= rho_star_i || continue
+
+            p_up = rho_min > one(T) ?
+                ceil(Int, -log_atol / (2 * log(rho_min))) : max_order
+            p_up = clamp(p_up, n_quad_i, max_order)
+
+            key = (i, j)
+            upsample[key] = haskey(upsample, key) ? max(upsample[key], p_up) : p_up
         end
     end
 
@@ -378,7 +391,6 @@ function laplace3d_DT_fmm3d_corrected(
     fmm_tol::Float64,
     up_tol::Float64,
     max_order::Int;
-    range_factor::Float64 = 5.0,
     correct_edges::Bool = false,
     adaptive_atol::Float64 = up_tol,
     adaptive_rtol::Float64 = sqrt(eps(Float64)),
@@ -390,7 +402,6 @@ function laplace3d_DT_fmm3d_corrected(
     adaptive_cfg = AdaptiveConfig(adaptive_atol, adaptive_rtol, adaptive_n_GL, adaptive_max_depth)
     (; upsample, adaptive) = build_neighbor_list(
         interface, max_order, up_tol;
-        range_factor = range_factor,
         correct_edges = correct_edges,
         adaptive_cfg = adaptive_cfg,
     )
@@ -406,7 +417,6 @@ function laplace3d_D_fmm3d_corrected(
     fmm_tol::Float64,
     up_tol::Float64,
     max_order::Int;
-    range_factor::Float64 = 5.0,
     correct_edges::Bool = false,
     adaptive_atol::Float64 = up_tol,
     adaptive_rtol::Float64 = sqrt(eps(Float64)),
@@ -418,7 +428,6 @@ function laplace3d_D_fmm3d_corrected(
     adaptive_cfg = AdaptiveConfig(adaptive_atol, adaptive_rtol, adaptive_n_GL, adaptive_max_depth)
     (; upsample, adaptive) = build_neighbor_list(
         interface, max_order, up_tol;
-        range_factor = range_factor,
         correct_edges = correct_edges,
         adaptive_cfg = adaptive_cfg,
     )

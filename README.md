@@ -259,8 +259,8 @@ Notes for cluster runs:
 
 ## Visualization
 
-Visualization helpers live under `viz_2d` and `viz_3d`. To use them, install Makie and a
-backend, then load the backend before `BoundaryIntegral`:
+Visualization helpers live under `viz_2d` and `viz_3d`. To use them, install Makie and a backend,
+then load the backend before `BoundaryIntegral`:
 
 ```julia
 using Pkg

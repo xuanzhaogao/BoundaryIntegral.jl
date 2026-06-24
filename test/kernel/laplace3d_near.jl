@@ -158,31 +158,23 @@ end
     atol = 1e-3
     neighbors = BI.build_neighbor_list(interface, max_order, atol; correct_edges = true)
 
-    center_p2 = (p2.corners[1] .+ p2.corners[2] .+ p2.corners[3] .+ p2.corners[4]) ./ 4
-    center_p1 = (p1.corners[1] .+ p1.corners[2] .+ p1.corners[3] .+ p1.corners[4]) ./ 4
+    # Expected classification/order via the Bernstein-radius criterion.
+    rho_star_1 = atol ^ (-1 / (2 * p1.n_quad))
+    rho_star_2 = atol ^ (-1 / (2 * p2.n_quad))
 
-    l1 = max(norm(p1.corners[1] .- p1.corners[2]), norm(p1.corners[2] .- p1.corners[3]))
-    l2 = max(norm(p2.corners[1] .- p2.corners[2]), norm(p2.corners[2] .- p2.corners[3]))
-    r1 = 5 * l1 / p1.n_quad
-    r2 = 5 * l2 / p2.n_quad
+    rho_min_12 = minimum(BI.bernstein_rho_panel(p1, pt) for pt in p2.points)
+    rho_min_21 = minimum(BI.bernstein_rho_panel(p2, pt) for pt in p1.points)
 
-    order_12 = p1.n_quad
-    for pt in p2.points
-        norm(pt .- center_p1) <= r1 || continue
-        order_12 = max(order_12, BI.check_quad_order3d(p1, pt, atol, max_order))
-    end
+    p_up_12 = clamp(ceil(Int, -log(atol) / (2 * log(rho_min_12))), p1.n_quad, max_order)
+    p_up_21 = clamp(ceil(Int, -log(atol) / (2 * log(rho_min_21))), p2.n_quad, max_order)
 
-    order_21 = p2.n_quad
-    for pt in p1.points
-        norm(pt .- center_p2) <= r2 || continue
-        order_21 = max(order_21, BI.check_quad_order3d(p2, pt, atol, max_order))
-    end
-
-    @test order_12 > p1.n_quad
-    @test order_21 > p2.n_quad
-    @test neighbors.upsample[(1, 2)] == order_12
-    @test neighbors.upsample[(2, 1)] == order_21
-    @test !haskey(neighbors.upsample, (3, 4))
+    @test rho_min_12 <= rho_star_1            # (1,2) is a near pair
+    @test rho_min_21 <= rho_star_2            # (2,1) is a near pair
+    @test p_up_12 > p1.n_quad                 # upsampling is actually required
+    @test p_up_21 > p2.n_quad
+    @test neighbors.upsample[(1, 2)] == p_up_12
+    @test neighbors.upsample[(2, 1)] == p_up_21
+    @test !haskey(neighbors.upsample, (3, 4))  # tiny, well-separated panels: ρ_min ≫ ρ⋆
     @test !haskey(neighbors.upsample, (4, 3))
 end
 
@@ -280,10 +272,18 @@ end
         n_quad_min = 2,
     )
 
-    neighbors = BI.build_neighbor_list(interface, 1, 1e-6; distance_only = true, range_factor = 10.0, correct_edges = true)
+    max_order = 16
+    atol = 1e-6
+    neighbors = BI.build_neighbor_list(interface, max_order, atol; correct_edges = true)
     @test !isempty(neighbors.upsample)
-    for ((i, _), n_up) in neighbors.upsample
-        @test n_up == interface.panels[i].n_quad
+    for ((i, j), n_up) in neighbors.upsample
+        p = interface.panels[i]
+        # near-pair order is a valid upsample of the (varying) source order
+        @test p.n_quad <= n_up <= max_order
+        # and the Bernstein criterion genuinely holds for this pair
+        rho_star = atol ^ (-1 / (2 * p.n_quad))
+        rho_min = minimum(BI.bernstein_rho_panel(p, pt) for pt in interface.panels[j].points)
+        @test rho_min <= rho_star
     end
 end
 
@@ -311,20 +311,23 @@ end
         ws,
         normal,
     )
+    # p3/p4: a separate cluster placed far from p1/p2 so the only near pairs are
+    # (1,2) and (2,1). (At the crude p=2 rule, ρ⋆≈5.6 is large, so the cluster
+    # must be well separated — a few panel-lengths is not enough.)
     p3 = BI.rect_panel3d_discretize(
-        (1.0, 1.0, 1.0),
-        (1.02, 1.0, 1.0),
-        (1.02, 1.02, 1.0),
-        (1.0, 1.02, 1.0),
+        (10.0, 10.0, 1.0),
+        (10.02, 10.0, 1.0),
+        (10.02, 10.02, 1.0),
+        (10.0, 10.02, 1.0),
         ns,
         ws,
         normal,
     )
     p4 = BI.rect_panel3d_discretize(
-        (1.0, 1.0, 1.2),
-        (1.02, 1.0, 1.2),
-        (1.02, 1.02, 1.2),
-        (1.0, 1.02, 1.2),
+        (10.0, 10.0, 1.2),
+        (10.02, 10.0, 1.2),
+        (10.02, 10.02, 1.2),
+        (10.0, 10.02, 1.2),
         ns,
         ws,
         normal,
@@ -332,6 +335,7 @@ end
 
     interface = BI.DielectricInterface([p1, p2, p3, p4], fill(2.0, 4), fill(1.0, 4))
     neighbors = BI.build_neighbor_list(interface, 12, 1e-3; correct_edges = true)
+    @test Set(keys(neighbors.upsample)) == Set([(1, 2), (2, 1)])
     corrections = BI.laplace3d_DT_corrections(interface, neighbors.upsample, neighbors.adaptive)
 
     cnt = [length(p1.points), length(p2.points), length(p3.points), length(p4.points)]
@@ -508,7 +512,7 @@ end
     fmm_tol = 1e-8
     up_tol = 1e-8
     max_order = 256
-    corrected_hcub = BI.laplace3d_DT_fmm3d_corrected_hcubature(interface, fmm_tol, up_tol, 5.0)
+    corrected_hcub = BI.laplace3d_DT_fmm3d_corrected_hcubature(interface, fmm_tol, up_tol)
     corrected_up = BI.laplace3d_DT_fmm3d_corrected(interface, fmm_tol, up_tol, max_order)
     direct = BI.laplace3d_DT(interface)
     direct[diagind(direct)] .= 0.0
@@ -549,7 +553,7 @@ end
 
     interface = BI.DielectricInterface([p1, p2], fill(2.0, 2), fill(1.0, 2))
     atol = 1e-8
-    neighbors = BI.build_neighbor_list(interface, 1, atol; distance_only = true, range_factor = 5.0, correct_edges = true)
+    neighbors = BI.build_neighbor_list(interface, 8, atol; correct_edges = true)
     corrections = BI.laplace3d_DT_corrections_hcubature(interface, neighbors.upsample, atol)
 
     sigma(p) = p[1] + 2 * p[2] - p[3]

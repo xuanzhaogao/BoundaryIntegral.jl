@@ -269,12 +269,14 @@ end
 function laplace3d_DT_fmm3d_corrected_hcubature(
     interface::DielectricInterface{P, Float64},
     fmm_tol::Float64,
-    hcubature_atol::Float64,
-    range_factor::Float64;
+    hcubature_atol::Float64;
 ) where {P <: AbstractPanel}
     n_points = num_points(interface)
     D_base = laplace3d_DT_fmm3d(interface, fmm_tol)
-    (; upsample, adaptive) = build_neighbor_list(interface, 1, hcubature_atol; distance_only = true, range_factor = range_factor)
+    # hcubature integrates each near block adaptively, so only the near-pair
+    # KEYS matter here; the upsample order (capped by max_order) is ignored.
+    max_order = maximum(panel.n_quad for panel in interface.panels)
+    (; upsample, adaptive) = build_neighbor_list(interface, max_order, hcubature_atol)
     @info "neighbor list: upsample=$(length(upsample)) adaptive=$(length(adaptive)) of $(length(interface.panels)^2)"
     corrections = laplace3d_DT_corrections_hcubature(interface, upsample, hcubature_atol)
 

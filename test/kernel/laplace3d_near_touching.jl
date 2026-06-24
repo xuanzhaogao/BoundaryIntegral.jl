@@ -67,11 +67,9 @@ using Test
     # Apply the FMM+correction operator to σvec, twice.
     op_off = BI.laplace3d_DT_fmm3d_corrected(
         interface, 1e-10, 1e-8, 24;
-        range_factor = 5.0,
         correct_edges = false)
     op_on  = BI.laplace3d_DT_fmm3d_corrected(
         interface, 1e-10, 1e-8, 24;
-        range_factor = 5.0,
         correct_edges = true,  adaptive_atol = 1e-8)
 
     y_off = op_off * σvec

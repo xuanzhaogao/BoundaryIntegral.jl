@@ -60,7 +60,7 @@ Base.eltype(::BatchedDielectricOperator) = Float64
 function batched_lhs_dielectric_box3d_fmm3d_corrected(
     interface::DielectricInterface{P, Float64},
     fmm_tol::Float64, up_tol::Float64, max_order::Int;
-    range_factor::Float64 = 5.0, correct_edges::Bool = false,
+    correct_edges::Bool = false,
     adaptive_atol::Float64 = up_tol, adaptive_rtol::Float64 = sqrt(eps(Float64)),
     adaptive_n_GL::Int = 0, adaptive_max_depth::Int = 20,
 ) where {P <: AbstractPanel}
@@ -80,7 +80,7 @@ function batched_lhs_dielectric_box3d_fmm3d_corrected(
 
     adaptive_cfg = AdaptiveConfig(adaptive_atol, adaptive_rtol, adaptive_n_GL, adaptive_max_depth)
     (; upsample, adaptive) = build_neighbor_list(interface, max_order, up_tol;
-        range_factor = range_factor, correct_edges = correct_edges, adaptive_cfg = adaptive_cfg)
+        correct_edges = correct_edges, adaptive_cfg = adaptive_cfg)
     corrections = laplace3d_DT_corrections(interface, upsample, adaptive)
 
     diag = Vector{Float64}(undef, n)

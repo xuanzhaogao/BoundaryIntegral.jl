@@ -24,18 +24,14 @@ using Test
 
     interface = BI.DielectricInterface([panel_a, panel_b], [1.0, 1.0], [1.0, 1.0])
 
-    # With correct_edges = false: classic discovery; range_factor is small
-    # enough that the two interior-node clouds do not see each other.
+    # With correct_edges = false: the corner phase is disabled, so no pair is
+    # ever placed in the adaptive (corner-touching) dict.
     (; upsample, adaptive) =
-        BI.build_neighbor_list(interface, 1, 1e-6;
-                               distance_only = true, range_factor = 0.5,
-                               correct_edges = false)
+        BI.build_neighbor_list(interface, 8, 1e-6; correct_edges = false)
     @test isempty(adaptive)
 
     # With correct_edges = true: the corner KDTree must surface the touching pair.
     (; upsample, adaptive) =
-        BI.build_neighbor_list(interface, 1, 1e-6;
-                               distance_only = true, range_factor = 0.5,
-                               correct_edges = true)
+        BI.build_neighbor_list(interface, 8, 1e-6; correct_edges = true)
     @test haskey(adaptive, (1, 2)) || haskey(adaptive, (2, 1))
 end
