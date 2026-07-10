@@ -943,31 +943,18 @@ function _box_edge_segments(center, Lx, Ly, Lz)
     return segs
 end
 
-function plot_campaign_geometry(c::BoundaryIntegral.CampaignInput;
-        full::Bool = true, size = (900, 720), colormap = :viridis,
-        box_linewidth = 1.5, orbital_markersize = 7, margin_frac = 0.15)
+# Draw boxes (ε-colored wireframe) + orbitals (colored by type) into `ax`. Returns (εlo, εhi).
+function _draw_campaign_geometry!(ax, c; colormap, box_linewidth, orbital_markersize, palette)
     boxes, epses, orbs = c.boxes, c.epses, c.orbitals
-    isempty(boxes) && throw(ArgumentError("campaign has no dielectric boxes"))
-
-    fig = Figure(size = size)
-    ax = Axis3(fig[1, 1]; aspect = :data, xlabel = "x (bohr)", ylabel = "y (bohr)",
-               zlabel = "z (bohr)", title = c.name)
-
     εlo, εhi = extrema(epses)
     grad = Makie.cgrad(colormap)
     εcolor(ε) = grad[εhi > εlo ? (ε - εlo) / (εhi - εlo) : 0.5]
-
-    # dielectric boxes as wireframe cuboids, colored by ε
     for (b, ε) in zip(boxes, epses)
         col = εcolor(ε)
         for (p, q) in _box_edge_segments(b.center, b.Lx, b.Ly, b.Lz)
-            lines!(ax, [p[1], q[1]], [p[2], q[2]], [p[3], q[3]];
-                   color = col, linewidth = box_linewidth)
+            lines!(ax, [p[1], q[1]], [p[2], q[2]], [p[3], q[3]]; color = col, linewidth = box_linewidth)
         end
     end
-
-    # orbital positions, colored by sublattice type
-    palette = Makie.wong_colors()
     for (i, t) in enumerate(sort(unique(o.type for o in orbs)))
         pts = [o.pos for o in orbs if o.type == t]
         isempty(pts) && continue
@@ -975,16 +962,56 @@ function plot_campaign_geometry(c::BoundaryIntegral.CampaignInput;
                  color = palette[mod1(i, length(palette))], markersize = orbital_markersize,
                  label = "orbital type $t")
     end
+    return (εlo, εhi)
+end
 
-    # focus view: clip axes to the orbital bounding box + margin (full=false)
-    if !full && !isempty(orbs)
-        xs = [o.pos[1] for o in orbs]; ys = [o.pos[2] for o in orbs]; zs = [o.pos[3] for o in orbs]
-        pad(v) = (lo = minimum(v); hi = maximum(v); m = margin_frac * max(hi - lo, 1.0); (lo - m, hi + m))
-        limits!(ax, pad(xs)..., pad(ys)..., pad(zs)...)
+# Cubic zoom box around the orbitals: bbox padded by margin_frac × (largest bbox extent),
+# so a coplanar (flat-z) orbital block still gets a sensible 3D window showing the slab.
+function _orbital_limits(orbs; margin_frac)
+    xs = [o.pos[1] for o in orbs]; ys = [o.pos[2] for o in orbs]; zs = [o.pos[3] for o in orbs]
+    xe = extrema(xs); ye = extrema(ys); ze = extrema(zs)
+    span = max(xe[2] - xe[1], ye[2] - ye[1], ze[2] - ze[1], 1.0)
+    p = margin_frac * span
+    return ((xe[1] - p, xe[2] + p), (ye[1] - p, ye[2] + p), (ze[1] - p, ze[2] + p))
+end
+
+_axis3(fig, cell, title) = Axis3(fig[cell...]; aspect = :data, xlabel = "x (bohr)",
+                                 ylabel = "y (bohr)", zlabel = "z (bohr)", title = title)
+
+"""
+    plot_campaign_geometry(c::CampaignInput; view=:both, kwargs...) -> Figure
+
+`view` ∈ (:full, :zoom, :both): full extent, zoom on the orbital block, or a two-panel figure
+with both. `margin_frac` (default 0.5) sets the zoom padding around the orbital bounding box.
+"""
+function plot_campaign_geometry(c::BoundaryIntegral.CampaignInput;
+        view::Symbol = :both, size = nothing, colormap = :viridis,
+        box_linewidth = 1.5, orbital_markersize = 7, margin_frac = 0.5)
+    view in (:full, :zoom, :both) || throw(ArgumentError("view must be :full, :zoom, or :both"))
+    isempty(c.boxes) && throw(ArgumentError("campaign has no dielectric boxes"))
+    orbs = c.orbitals
+    palette = Makie.wong_colors()
+    draw!(ax) = _draw_campaign_geometry!(ax, c; colormap = colormap,
+             box_linewidth = box_linewidth, orbital_markersize = orbital_markersize, palette = palette)
+    zoom!(ax) = (!isempty(orbs) && limits!(ax, _orbital_limits(orbs; margin_frac = margin_frac)...))
+
+    sz = size !== nothing ? size : (view === :both ? (1400, 680) : (900, 720))
+    fig = Figure(size = sz)
+
+    if view === :both
+        ax1 = _axis3(fig, (1, 1), "$(c.name) — full")
+        εr = draw!(ax1)
+        ax2 = _axis3(fig, (1, 2), "orbital zoom")
+        draw!(ax2); zoom!(ax2)
+        Colorbar(fig[1, 3]; limits = εr, colormap = colormap, label = "ε")
+        axislegend(ax1; position = :rt, framevisible = true)
+    else
+        ax = _axis3(fig, (1, 1), view === :zoom ? "$(c.name) — orbital zoom" : c.name)
+        εr = draw!(ax)
+        view === :zoom && zoom!(ax)
+        Colorbar(fig[1, 2]; limits = εr, colormap = colormap, label = "ε")
+        axislegend(ax; position = :rt, framevisible = true)
     end
-
-    Colorbar(fig[1, 2]; limits = (εlo, εhi), colormap = colormap, label = "ε")
-    axislegend(ax; position = :rt, framevisible = true)
     return fig
 end
 
