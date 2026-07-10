@@ -6,6 +6,7 @@ using BoundaryIntegral: VolumeSource
 using BoundaryIntegral: AbstractPanel, DielectricInterface, build_neighbor_list
 
 import BoundaryIntegral: viz_2d, viz_3d, viz_3d_surface, viz_3d_interface_solution, viz_3d_zslice, num_points, eachpoint
+import BoundaryIntegral: plot_campaign_geometry
 
 function _resample_volume_to_uniform(axes::NTuple{3, Vector{T}}, density::AbstractArray{T, 3}) where {T}
     xs, ys, zs = axes
@@ -924,5 +925,70 @@ function viz_3d_interface_solution(
 
     return fig
 end
+
+# ---------------------------------------------------------------------------
+# plot_campaign_geometry — 3D view of a campaign's dielectric boxes + orbitals
+# ---------------------------------------------------------------------------
+
+# 12 edges of an axis-aligned box (center, Lx, Ly, Lz) as (p, q) endpoint pairs.
+function _box_edge_segments(center, Lx, Ly, Lz)
+    cx, cy, cz = center
+    hx, hy, hz = Lx / 2, Ly / 2, Lz / 2
+    c(sx, sy, sz) = (cx + sx * hx, cy + sy * hy, cz + sz * hz)
+    corners = Dict((sx, sy, sz) => c(sx, sy, sz) for sx in (-1, 1), sy in (-1, 1), sz in (-1, 1))
+    segs = Tuple{NTuple{3,Float64}, NTuple{3,Float64}}[]
+    for sy in (-1, 1), sz in (-1, 1); push!(segs, (corners[(-1, sy, sz)], corners[(1, sy, sz)])); end  # x edges
+    for sx in (-1, 1), sz in (-1, 1); push!(segs, (corners[(sx, -1, sz)], corners[(sx, 1, sz)])); end  # y edges
+    for sx in (-1, 1), sy in (-1, 1); push!(segs, (corners[(sx, sy, -1)], corners[(sx, sy, 1)])); end  # z edges
+    return segs
+end
+
+function plot_campaign_geometry(c::BoundaryIntegral.CampaignInput;
+        full::Bool = true, size = (900, 720), colormap = :viridis,
+        box_linewidth = 1.5, orbital_markersize = 7, margin_frac = 0.15)
+    boxes, epses, orbs = c.boxes, c.epses, c.orbitals
+    isempty(boxes) && throw(ArgumentError("campaign has no dielectric boxes"))
+
+    fig = Figure(size = size)
+    ax = Axis3(fig[1, 1]; aspect = :data, xlabel = "x (bohr)", ylabel = "y (bohr)",
+               zlabel = "z (bohr)", title = c.name)
+
+    εlo, εhi = extrema(epses)
+    grad = Makie.cgrad(colormap)
+    εcolor(ε) = grad[εhi > εlo ? (ε - εlo) / (εhi - εlo) : 0.5]
+
+    # dielectric boxes as wireframe cuboids, colored by ε
+    for (b, ε) in zip(boxes, epses)
+        col = εcolor(ε)
+        for (p, q) in _box_edge_segments(b.center, b.Lx, b.Ly, b.Lz)
+            lines!(ax, [p[1], q[1]], [p[2], q[2]], [p[3], q[3]];
+                   color = col, linewidth = box_linewidth)
+        end
+    end
+
+    # orbital positions, colored by sublattice type
+    palette = Makie.wong_colors()
+    for (i, t) in enumerate(sort(unique(o.type for o in orbs)))
+        pts = [o.pos for o in orbs if o.type == t]
+        isempty(pts) && continue
+        scatter!(ax, [p[1] for p in pts], [p[2] for p in pts], [p[3] for p in pts];
+                 color = palette[mod1(i, length(palette))], markersize = orbital_markersize,
+                 label = "orbital type $t")
+    end
+
+    # focus view: clip axes to the orbital bounding box + margin (full=false)
+    if !full && !isempty(orbs)
+        xs = [o.pos[1] for o in orbs]; ys = [o.pos[2] for o in orbs]; zs = [o.pos[3] for o in orbs]
+        pad(v) = (lo = minimum(v); hi = maximum(v); m = margin_frac * max(hi - lo, 1.0); (lo - m, hi + m))
+        limits!(ax, pad(xs)..., pad(ys)..., pad(zs)...)
+    end
+
+    Colorbar(fig[1, 2]; limits = (εlo, εhi), colormap = colormap, label = "ε")
+    axislegend(ax; position = :rt, framevisible = true)
+    return fig
+end
+
+plot_campaign_geometry(toml_path::AbstractString; kwargs...) =
+    plot_campaign_geometry(BoundaryIntegral.load_campaign(toml_path); kwargs...)
 
 end
