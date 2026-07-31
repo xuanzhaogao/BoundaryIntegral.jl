@@ -61,7 +61,7 @@ export density_centroid
 # multi-rhs solver
 export pair_density_source
 export batched_lhs_dielectric_box3d_fmm3d_corrected, BatchedDielectricOperator
-export solve_dielectric_box3d_block
+export solve_dielectric_box3d_block, dielectric_diagonal_scaling
 export four_index_matrix
 
 # lattice batch

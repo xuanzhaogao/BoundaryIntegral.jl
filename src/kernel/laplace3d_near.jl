@@ -231,6 +231,12 @@ end
 # panel-pair Bernstein radius over the target nodes of P (see bernstein.jl) and
 # p is the source order. Near pairs are upsampled to order
 # p_up = ⌈ -log(atol) / (2 log ρ_min) ⌉, clamped to [p, max_order].
+#
+# NOTE on `correct_edges`: this low-level builder keeps `false` as its default, but every
+# operator-level entry point (laplace3d_{DT,D}_fmm3d_corrected, lhs_/batched_lhs_dielectric_
+# box3d_fmm3d_corrected, solve_dielectric_box3d_block) now defaults it to `true` and passes it
+# explicitly. `false` is what `laplace3d_DT_fmm3d_corrected_hcubature` needs, since that path
+# consumes only the `upsample` dict and would silently discard `adaptive` (touching) pairs.
 function build_neighbor_list(
     interface::DielectricInterface{P, T},
     max_order::Int,
@@ -391,7 +397,7 @@ function laplace3d_DT_fmm3d_corrected(
     fmm_tol::Float64,
     up_tol::Float64,
     max_order::Int;
-    correct_edges::Bool = false,
+    correct_edges::Bool = true,
     adaptive_atol::Float64 = up_tol,
     adaptive_rtol::Float64 = sqrt(eps(Float64)),
     adaptive_n_GL::Int = 0,
@@ -417,7 +423,7 @@ function laplace3d_D_fmm3d_corrected(
     fmm_tol::Float64,
     up_tol::Float64,
     max_order::Int;
-    correct_edges::Bool = false,
+    correct_edges::Bool = true,
     adaptive_atol::Float64 = up_tol,
     adaptive_rtol::Float64 = sqrt(eps(Float64)),
     adaptive_n_GL::Int = 0,

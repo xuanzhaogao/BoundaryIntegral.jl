@@ -60,7 +60,7 @@ Base.eltype(::BatchedDielectricOperator) = Float64
 function batched_lhs_dielectric_box3d_fmm3d_corrected(
     interface::DielectricInterface{P, Float64},
     fmm_tol::Float64, up_tol::Float64, max_order::Int;
-    correct_edges::Bool = false,
+    correct_edges::Bool = true,
     adaptive_atol::Float64 = up_tol, adaptive_rtol::Float64 = sqrt(eps(Float64)),
     adaptive_n_GL::Int = 0, adaptive_max_depth::Int = 20,
 ) where {P <: AbstractPanel}
@@ -211,24 +211,78 @@ function rhs_dielectric_box3d_fmm3d(
 end
 
 """
+    dielectric_diagonal_scaling(interface) -> Vector{Float64}
+
+Diagonal right preconditioner `P = G⁻¹` for the dielectric BIE operator
+`A = G + Dᵀ + Cᵀ`, where the contrast term is `G = diag(t_P)` with
+`t_P = ½(ε_out+ε_in)/(ε_out−ε_in)` per panel (this is `−½γ_P` in the paper's sign
+convention; the code carries the opposite sign in BOTH `A` and the RHS). Entry `i` is
+`1/t_{P(i)}`, so `A P = I + (Dᵀ+Cᵀ)P` has its spectrum in one cluster at 1 rather than
+one cluster per distinct contrast.
+
+Two properties worth knowing before using it:
+
+  * `|γ| > 1` for any pair of positive permittivities, so `|1/t| < 2`: the scaling is
+    uniformly bounded and cannot amplify a row.
+  * It is a no-op whenever the geometry has a single contrast, since then `P` is a
+    scalar multiple of `I` and GMRES is invariant under scalar scaling of `(A, F)`.
+    Expect *identical* iteration counts on single-box problems.
+
+It clusters the spectrum of a multi-material geometry; it does NOT help the
+`|γ| → 1` (conductor) limit, where the eigenvalues of `I + (Dᵀ+Cᵀ)P` migrate toward 0.
+"""
+function dielectric_diagonal_scaling(interface::DielectricInterface{P, Float64}) where {P <: AbstractPanel}
+    s = Vector{Float64}(undef, num_points(interface))
+    offset = 0
+    for i in 1:length(interface.panels)
+        eps_in = interface.eps_in[i]; eps_out = interface.eps_out[i]
+        np = num_points(interface.panels[i])
+        t = 0.5 * (eps_out + eps_in) / (eps_out - eps_in)
+        for j in 1:np
+            s[offset + j] = 1 / t
+        end
+        offset += np
+    end
+    return s
+end
+
+"""
     solve_dielectric_box3d_block(interface, vss::Vector{VolumeSource}; kw...) -> (Σ, stats)
 
 Low-level multi-RHS solve on a prebuilt shared interface: builds the batched operator and the
 N×K RHS, then block-GMRES solves A Σ = F for the layer densities Σ (N×K).
+
+`correct_edges` forwards to [`batched_lhs_dielectric_box3d_fmm3d_corrected`] and defaults to
+`true`. Setting it `false` drops rim (`is_edge`) panels from the near list as both source and
+target and builds NO touching-pair (adaptive) corrections at all, which degrades the
+conditioning of `A` badly as the mesh is refined at the edges: on the three-material
+benchmark of `examples/diag_precond_experiment.jl` at p=6, l_ec=1.25 (N≈2.4e4), GMRES needs
+179 iterations without the edge correction versus 27 with it (828 vs 51 at ε₂=200), so the
+correction pays for its setup many times over.
+
+`precondition` (default `true`) applies the diagonal contrast scaling of
+[`dielectric_diagonal_scaling`](@ref) as a RIGHT preconditioner. Right rather than left so
+that block GMRES keeps minimizing the true residual `‖F − AΣ‖` and `rtol` retains its
+meaning; `Krylov.block_gmres` applies `N` to the returned solution, so `Σ` needs no
+post-scaling. Same solution, fewer iterations: 1.6–2.1× on the multi-material benchmark of
+`examples/diag_precond_experiment.jl`, and exactly a no-op for a single-contrast geometry.
 """
 function solve_dielectric_box3d_block(
     interface::DielectricInterface{P, Float64},
     vss::Vector{<:VolumeSource{Float64, 3}};
     fmm_tol::Float64 = 1e-9, up_tol::Float64 = 1e-9, max_order::Int = 8,
     rtol::Float64 = 1e-10, atol::Float64 = 0.0, itmax::Int = 500,
+    precondition::Bool = true, correct_edges::Bool = true,
     screen_boxes::Union{Nothing, Vector{<:NamedTuple}} = nothing,
     screen_epses::Union{Nothing, Vector{Float64}} = nothing,
     screen_eps_out::Float64 = 1.0,
 ) where {P <: FlatPanel{Float64, 3}}
-    op = batched_lhs_dielectric_box3d_fmm3d_corrected(interface, fmm_tol, up_tol, max_order)
+    op = batched_lhs_dielectric_box3d_fmm3d_corrected(interface, fmm_tol, up_tol, max_order;
+        correct_edges = correct_edges)
     F = rhs_dielectric_box3d_fmm3d(interface, vss, fmm_tol;
         screen_boxes = screen_boxes, screen_epses = screen_epses, screen_eps_out = screen_eps_out)
-    return Krylov.block_gmres(op, F; rtol = rtol, atol = atol, itmax = itmax)
+    N = precondition ? Diagonal(dielectric_diagonal_scaling(interface)) : I
+    return Krylov.block_gmres(op, F; N = N, rtol = rtol, atol = atol, itmax = itmax)
 end
 
 """
