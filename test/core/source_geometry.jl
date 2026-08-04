@@ -114,6 +114,13 @@ end
     @test BI.in_near_region(g, tg, 1)
     @test BI.in_near_region(g, tg, 2)
     @test !BI.in_near_region(g, tg, 3)
+
+    # Eq. (3.9) is inclusive: exactly on the hi[1] face is near, one ULP past is not.
+    tg_edge = [g.hi[1]              nextfloat(g.hi[1]);
+               g.center[2]          g.center[2];
+               g.center[3]          g.center[3]]
+    @test BI.in_near_region(g, tg_edge, 1)
+    @test !BI.in_near_region(g, tg_edge, 2)
 end
 
 @testset "lattice_spacing is the 2-norm, not the shortest step" begin
@@ -126,6 +133,25 @@ end
     A = hcat(collect.(collect(vsk.lattice_basis))...)
     @test isapprox(BI.lattice_spacing(vsk), opnorm(A, 2); rtol = 1e-12)
     @test BI.lattice_spacing(vsk) > maximum(norm.(collect.(collect(vsk.lattice_basis))))
+
+    # source_box half-extent must be a row-sum over lattice vectors' component
+    # along each fixed axis, not a column-sum (which would be invisible on a
+    # diagonal/cubic basis). Hand-derived from A_rho columns 0.25*At = (0.25,0,0),
+    # 0.25*Bt = (0.225,0.1,0), 0.25*Ct = (0,0,0.25): half-extents are
+    # (0.2375, 0.05, 0.125). Sample bbox is x in [0,1.425], y in [0,0.3],
+    # z in [0,0.75] since x = u + 0.9v, y = 0.4v, z = w for u,v,w in
+    # {0,0.25,0.5,0.75}. A transposed implementation would instead give
+    # half-extents (0.125, 0.1625, 0.125), failing axes 1 and 2 here.
+    lo_k, hi_k, l_k = BI.source_box(vsk)
+    @test isapprox(lo_k[1], -0.2375; atol = 1e-14)
+    @test isapprox(lo_k[2], -0.05;   atol = 1e-14)
+    @test isapprox(lo_k[3], -0.125;  atol = 1e-14)
+    @test isapprox(hi_k[1],  1.6625; atol = 1e-14)
+    @test isapprox(hi_k[2],  0.35;   atol = 1e-14)
+    @test isapprox(hi_k[3],  0.875;  atol = 1e-14)
+    @test isapprox(l_k[1],   1.9;    atol = 1e-14)
+    @test isapprox(l_k[2],   0.4;    atol = 1e-14)
+    @test isapprox(l_k[3],   1.0;    atol = 1e-14)
 end
 
 @testset "lattice_spacing falls back for non-lattice sources" begin
