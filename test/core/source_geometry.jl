@@ -72,3 +72,72 @@ end
     sc_iface = BI.screened_volume_source(iface, gsrc, BI.SharpScreening())
     @test sc_iface.lattice_basis == gsrc.lattice_basis
 end
+
+@testset "near_field_geometry matches Section 3 by hand" begin
+    # Cell-centered cubic grid on B = [-1,1]^3, so l = 2 exactly.
+    n = 64
+    h = 2.0 / n
+    xs = collect(-1.0 + h/2 .+ h .* (0:n-1))
+    w  = fill(h^3, n, n, n)
+    d  = fill(1.0, n, n, n)
+    vs = VolumeSource((xs, xs, xs), w, d)
+
+    @test isapprox(BI.lattice_spacing(vs), h; rtol = 1e-14)
+
+    lo, hi, l = BI.source_box(vs)
+    for a in 1:3
+        @test isapprox(lo[a], -1.0; atol = 1e-14)
+        @test isapprox(hi[a],  1.0; atol = 1e-14)
+        @test isapprox(l[a],   2.0; atol = 1e-14)
+    end
+
+    c_pad = 5.0
+    g = BI.near_field_geometry(vs; c_pad = c_pad)
+    hn_exp = c_pad * h
+    L_exp  = sqrt(3 * (2.0 + hn_exp)^2)
+    @test isapprox(g.hn, hn_exp; rtol = 1e-14)
+    @test isapprox(g.L,  L_exp;  rtol = 1e-14)
+    for a in 1:3
+        @test isapprox(g.lo[a], -1.0 - hn_exp; atol = 1e-14)
+        @test isapprox(g.hi[a],  1.0 + hn_exp; atol = 1e-14)
+        @test isapprox(g.center[a], 0.0; atol = 1e-14)
+        # Eq. (3.16) at equality
+        @test isapprox(g.dks[a], 2π / (2.0 + hn_exp + L_exp); rtol = 1e-12)
+        # prevfloat keeps us strictly inside the aliasing-free set
+        @test g.dks[a] <= 2π / (2.0 + hn_exp + L_exp)
+    end
+
+    # Eq. (3.9) box test
+    tg = [0.0  1.0 + hn_exp/2   1.0 + 2*hn_exp;
+          0.0  0.0              0.0;
+          0.0  0.0              0.0]
+    @test BI.in_near_region(g, tg, 1)
+    @test BI.in_near_region(g, tg, 2)
+    @test !BI.in_near_region(g, tg, 3)
+end
+
+@testset "lattice_spacing is the 2-norm, not the shortest step" begin
+    # Skew lattice: ||A_rho||_2 must exceed the longest column norm.
+    nx = 4
+    frac = collect((i - 1) / nx for i in 1:nx)
+    At = (1.0, 0.0, 0.0); Bt = (0.9, 0.4, 0.0); Ct = (0.0, 0.0, 1.0)
+    vsk = VolumeSource((frac, frac, frac), fill(1.0, nx, nx, nx), fill(1.0, nx, nx, nx),
+                       (0.0, 0.0, 0.0), (At, Bt, Ct))
+    A = hcat(collect.(collect(vsk.lattice_basis))...)
+    @test isapprox(BI.lattice_spacing(vsk), opnorm(A, 2); rtol = 1e-12)
+    @test BI.lattice_spacing(vsk) > maximum(norm.(collect.(collect(vsk.lattice_basis))))
+end
+
+@testset "lattice_spacing falls back for non-lattice sources" begin
+    # Cubic point cloud with no basis: fallback must equal the grid spacing,
+    # which is what guarantees cubic-lattice results are unchanged.
+    n = 6; h = 0.25
+    pts = Matrix{Float64}(undef, 3, n^3); m = 0
+    for k in 1:n, j in 1:n, i in 1:n
+        m += 1
+        pts[1, m] = i * h; pts[2, m] = j * h; pts[3, m] = k * h
+    end
+    vsf = VolumeSource(pts, fill(h^3, n^3), fill(1.0, n^3))
+    @test vsf.lattice_basis === nothing
+    @test isapprox(BI.lattice_spacing(vsf), h; rtol = 1e-12)
+end

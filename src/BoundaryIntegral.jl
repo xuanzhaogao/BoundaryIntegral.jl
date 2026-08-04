@@ -22,6 +22,7 @@ export interface_uniform_samples
 export PointSource, VolumeSource
 export PrecomputedVolumeField, volume_field_potential, volume_field_gradient,
        rhs_dielectric_box3d_field
+export NearFieldGeometry, near_field_geometry, in_near_region, lattice_spacing, source_box
 export screened_volume_source
 export SharpScreening, SoftMixPermittivity, SoftMixInversePermittivity
 
@@ -94,6 +95,7 @@ export plot_campaign_geometry
 # core types
 include("core/panels.jl")
 include("core/sources.jl")
+include("core/source_geometry.jl")
 
 # kernel functions
 include("kernel/laplace2d.jl")
