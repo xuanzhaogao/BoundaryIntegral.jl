@@ -34,9 +34,10 @@ const BI = BoundaryIntegral
     @test vsf.lattice_basis === nothing
 
     # --- flat ctor accepts an explicit basis ---
+    lb_explicit = ((h, 0.0, 0.0), (0.0, h, 0.0), (0.0, 0.0, h))
     vsb = VolumeSource(pts, fill(1.0, 10), fill(1.0, 10);
-                       lattice_basis = ((h, 0.0, 0.0), (0.0, h, 0.0), (0.0, 0.0, h)))
-    @test vsb.lattice_basis !== nothing
+                       lattice_basis = lb_explicit)
+    @test vsb.lattice_basis == lb_explicit
 
     # --- with_density preserves the basis ---
     vs2 = BI.with_density(vs, fill(2.0, length(vs.density)))
@@ -53,7 +54,21 @@ end
 @testset "screened_volume_source preserves lattice_basis" begin
     gsrc = BI.GaussianVolumeSource((0.0, 0.0, 0.0), 0.3, 8, 1e-6)
     @test gsrc.lattice_basis !== nothing
+
+    # --- multibox overload: (boxes, epses, eps_out, vs, mode) ---
     boxes = [(center = (0.0, 0.0, 0.0), Lx = 1.0, Ly = 1.0, Lz = 1.0)]
     sc = BI.screened_volume_source(boxes, [2.0], 1.0, gsrc, BI.SharpScreening())
     @test sc.lattice_basis == gsrc.lattice_basis
+
+    # --- single-box overload: (Lx, Ly, Lz, vs, eps_in, eps_out, mode) ---
+    sc_box = BI.screened_volume_source(1.0, 1.0, 1.0, gsrc, 2.0, 1.0, BI.SharpScreening())
+    @test sc_box.lattice_basis == gsrc.lattice_basis
+
+    # --- interface overload: (interface, vs, mode) ---
+    # Cheapest available fixture: a uniform-eps box interface built the same way
+    # test/core/panels.jl does, via single_dielectric_box3d (single call, no
+    # manual panel/quadrature setup).
+    iface = BI.single_dielectric_box3d(1.0, 1.0, 1.0, 3, 0.3, 2.0, 1.0)
+    sc_iface = BI.screened_volume_source(iface, gsrc, BI.SharpScreening())
+    @test sc_iface.lattice_basis == gsrc.lattice_basis
 end
