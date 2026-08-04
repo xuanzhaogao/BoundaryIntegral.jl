@@ -1,5 +1,5 @@
 """
-    PrecomputedVolumeField(vs; tol, kmax = nothing, margin_h = 5.0,
+    PrecomputedVolumeField(vs; tol, kmax = nothing, c_pad = 5.0,
                            compute_pot = true, compute_grad = true,
                            cache_fft = false, cache_fft_pad = 1.25)
 
@@ -7,9 +7,10 @@ Target-independent precomputed spectral representation of the free-space
 Laplace potential (`1/(4π r)` convention) of a `VolumeSource`, for evaluation
 at many target batches without redoing per-call setup.
 
-Construction (once): fix the evaluation box B = source bounding box extended
-by `margin_h * h` (`h` = mean source spacing); on the Fourier box determined
-by B alone, run the type-1 NUFFT of all source charges, apply the truncated
+Construction (once): fix the evaluation box B_pad = source box B (Eq. 3.7)
+padded by `c_pad * h` where `h = ||A_rho||_2` (Eq. 3.3); the Fourier box
+follows Eqs. (3.11) and (3.16) via `near_field_geometry`. On that Fourier
+box, run the type-1 NUFFT of all source charges, apply the truncated
 Laplace kernel `TKM3D.truncated_laplace3d_hat`, and (optionally) materialize
 the spectral gradient coefficients.
 
@@ -58,10 +59,7 @@ coexist before the coefficient arrays are released (~16 GB at production scale).
 struct PrecomputedVolumeField{T <: AbstractFloat}
     sources::Matrix{T}
     charges::Vector{T}
-    lo::NTuple{3, T}
-    hi::NTuple{3, T}
-    center::NTuple{3, T}
-    dks::NTuple{3, T}
+    geom::NearFieldGeometry{T}
     nmodes::NTuple{3, Int}
     kmax::T
     tol::T
@@ -84,7 +82,7 @@ function PrecomputedVolumeField(
     vs::VolumeSource{T, 3};
     tol::Real,
     kmax::Union{Nothing, Real} = nothing,
-    margin_h::Real = 5.0,
+    c_pad::Real = 5.0,
     compute_pot::Bool = true,
     compute_grad::Bool = true,
     cache_fft::Bool = false,
@@ -95,17 +93,13 @@ function PrecomputedVolumeField(
     tolT = T(tol)
     tolT > zero(T) || throw(ArgumentError("tol must be positive"))
     sources, charges = _volume_source_fmm_sources(vs)
-    h = _estimate_source_spacing(vs)
-    km = isnothing(kmax) ? T(_estimate_tkm3dc_kmax(h)) : T(kmax)
+    geom = near_field_geometry(vs; c_pad = c_pad)
+    # k_max keeps the min-nearest-neighbour spacing: Section 3.3 leaves k_Nyq open
+    # for a general lattice, so only h_n is pinned to Eq. (3.3)'s ||A_rho||_2.
+    km = isnothing(kmax) ? T(_estimate_tkm3dc_kmax(_estimate_source_spacing(vs))) : T(kmax)
     km > zero(T) || throw(ArgumentError("kmax must be positive"))
-
-    m = T(margin_h) * h
-    lo = ntuple(d -> minimum(view(sources, d, :)) - m, 3)
-    hi = ntuple(d -> maximum(view(sources, d, :)) + m, 3)
-    corners = T[lo[1] hi[1]; lo[2] hi[2]; lo[3] hi[3]]
-    lengths, center = TKM3D.combined_box_geometry_3xn(sources, corners)
-    Lbig = sqrt(sum(abs2, lengths))
-    dks = ntuple(d -> prevfloat(T(2π) / (lengths[d] + Lbig)), 3)
+    center = geom.center
+    dks = geom.dks
     kx = TKM3D.centered_mode_axis(dks[1], km)
     ky = TKM3D.centered_mode_axis(dks[2], km)
     kz = TKM3D.centered_mode_axis(dks[3], km)
@@ -119,7 +113,7 @@ function PrecomputedVolumeField(
     @inbounds for iz in eachindex(kz), iy in eachindex(ky), ix in eachindex(kx)
         k = sqrt(kx[ix]^2 + ky[iy]^2 + kz[iz]^2)
         coeff[ix, iy, iz] = k <= km ?
-            coeff[ix, iy, iz] * TKM3D.truncated_laplace3d_hat(k, Lbig) :
+            coeff[ix, iy, iz] * TKM3D.truncated_laplace3d_hat(k, geom.L) :
             zero(eltype(coeff))
     end
     grad_coeff = compute_grad ? TKM3D._spectral_gradient_coeffs_3d(coeff, kx, ky, kz) : nothing
@@ -131,8 +125,8 @@ function PrecomputedVolumeField(
             _field_cache_fft_grids(coeff, grad_coeff, tolT, T(cache_fft_pad), compute_pot)
     end
     return PrecomputedVolumeField{T}(
-        sources, charges, lo, hi, (center[1], center[2], center[3]),
-        dks, nmodes, km, tolT, prefactor,
+        sources, charges, geom,
+        nmodes, km, tolT, prefactor,
         (compute_pot && !cache_fft) ? coeff : nothing,
         cache_fft ? nothing : grad_coeff,
         nfdim, pot_grid, grad_grid,
@@ -302,14 +296,14 @@ function _field_interponly_type2(
 end
 
 @inline in_field_box(f::PrecomputedVolumeField, targets::AbstractMatrix, i::Integer) =
-    (f.lo[1] <= targets[1, i] <= f.hi[1]) &&
-    (f.lo[2] <= targets[2, i] <= f.hi[2]) &&
-    (f.lo[3] <= targets[3, i] <= f.hi[3])
+    in_near_region(f.geom, targets, i)
 
 function _field_scaled_targets(f::PrecomputedVolumeField{T}, targets, idxs) where {T}
-    txn = T[f.dks[1] * (targets[1, i] - f.center[1]) for i in idxs]
-    tyn = T[f.dks[2] * (targets[2, i] - f.center[2]) for i in idxs]
-    tzn = T[f.dks[3] * (targets[3, i] - f.center[3]) for i in idxs]
+    dks = f.geom.dks
+    c = f.geom.center
+    txn = T[dks[1] * (targets[1, i] - c[1]) for i in idxs]
+    tyn = T[dks[2] * (targets[2, i] - c[2]) for i in idxs]
+    tzn = T[dks[3] * (targets[3, i] - c[3]) for i in idxs]
     return txn, tyn, tzn
 end
 

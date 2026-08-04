@@ -158,12 +158,12 @@ end
     targets = Matrix{Float64}(undef, 3, nin + ncorners + nout)
     alphas = (sqrt(2) - 1, sqrt(3) - 1, sqrt(5) - 2)   # deterministic low-discrepancy fill
     for d in 1:3
-        targets[d, 1:nin] .= f0.lo[d] .+ mod.(alphas[d] .* (1:nin), 1.0) .* (f0.hi[d] - f0.lo[d])
+        targets[d, 1:nin] .= f0.geom.lo[d] .+ mod.(alphas[d] .* (1:nin), 1.0) .* (f0.geom.hi[d] - f0.geom.lo[d])
     end
     # 8 corners of the [lo, hi] box — all must be classified as in-box
-    for (ci, (cx, cy, cz)) in enumerate(Iterators.product((f0.lo[1], f0.hi[1]),
-                                                           (f0.lo[2], f0.hi[2]),
-                                                           (f0.lo[3], f0.hi[3])))
+    for (ci, (cx, cy, cz)) in enumerate(Iterators.product((f0.geom.lo[1], f0.geom.hi[1]),
+                                                           (f0.geom.lo[2], f0.geom.hi[2]),
+                                                           (f0.geom.lo[3], f0.geom.hi[3])))
         targets[:, nin + ci] .= [cx, cy, cz]
     end
     targets[:, nin + ncorners + 1:end] .= [3.0  0.0  -3.0  4.0;
@@ -205,4 +205,23 @@ end
     # identical refinement path => identical panel geometry
     corner_key(iface) = sort([(p.corners[1]..., p.corners[3]...) for p in iface.panels])
     @test corner_key(iface_f) == corner_key(iface_vs)
+end
+
+@testset "PrecomputedVolumeField geometry matches near_field_geometry" begin
+    gsrc = BoundaryIntegral.GaussianVolumeSource((0.0, 0.0, 0.0), 0.3, 12, 1e-6)
+    g = BoundaryIntegral.near_field_geometry(gsrc; c_pad = 5.0)
+    f = PrecomputedVolumeField(gsrc; tol = 1e-6, c_pad = 5.0)
+    @test f.geom.lo == g.lo
+    @test f.geom.hi == g.hi
+    @test f.geom.dks == g.dks
+    @test f.geom.L == g.L
+    # classification agrees between the struct helper and the free function
+    tg = [0.0 5.0; 0.0 5.0; 0.0 5.0]
+    @test BoundaryIntegral.in_field_box(f, tg, 1) == BoundaryIntegral.in_near_region(g, tg, 1)
+    @test BoundaryIntegral.in_field_box(f, tg, 2) == BoundaryIntegral.in_near_region(g, tg, 2)
+    # c_pad widens the near region
+    f2 = PrecomputedVolumeField(gsrc; tol = 1e-6, c_pad = 10.0)
+    @test f2.geom.hi[1] > f.geom.hi[1]
+    # margin_h is gone
+    @test_throws MethodError PrecomputedVolumeField(gsrc; tol = 1e-6, margin_h = 5.0)
 end
