@@ -17,6 +17,7 @@ using Test
     # core
     include("core/panels.jl")
     include("core/sources.jl")
+    include("core/source_geometry.jl")
     include("shape/volume_field.jl")
 
     # kernel functions
