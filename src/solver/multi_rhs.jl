@@ -286,14 +286,22 @@ function solve_dielectric_box3d_block(
 end
 
 """
-    four_index_matrix(interface, sources, Σ; lhs_tol, volume_tol, range_factor=5.0) -> K×K
+    four_index_matrix(interface, sources, Σ; lhs_tol, volume_tol, c_pad=5.0,
+        range_factor=5.0) -> K×K
 
-Step 7 contraction: V[a,b] = ∫ ρ_a (u_inc[ρ_b] + u[σ_b]). Independent reference for
-`evaluate_batch_potential` (different evaluation path: TKM incident + corrected-FMM pottrg
-at the group grid). No longer tied to SystemInput.
+Step 7 contraction: V[a,b] = ∫ ρ_a (u_inc[ρ_b] + u[σ_b]). No longer tied to
+SystemInput. Since Task 5's migration this shares the Section 3 near-field
+geometry (`near_field_geometry`/`PrecomputedVolumeField`) with
+`evaluate_batch_potential`, so it no longer independently checks the incident
+evaluation path; it still independently checks the contraction (direct
+`dot` against the raw densities/weights here vs. the store-based contraction
+there) and the corrected-FMM `pottrg` layer-potential path built at the
+group grid (`targets = sources[1].positions`, so every target is a source
+point and always inside `B_pad` — no far/FMM branch is exercised here).
 """
 function four_index_matrix(interface, sources::Vector{<:VolumeSource{Float64, 3}},
-        Σ::AbstractMatrix; lhs_tol::Float64, volume_tol::Float64, range_factor::Float64 = 5.0)
+        Σ::AbstractMatrix; lhs_tol::Float64, volume_tol::Float64, c_pad::Float64 = 5.0,
+        range_factor::Float64 = 5.0)
     K = length(sources)
     K == 0 && return zeros(Float64, 0, 0)
     targets = sources[1].positions
@@ -301,10 +309,8 @@ function four_index_matrix(interface, sources::Vector{<:VolumeSource{Float64, 3}
     u_inc = Vector{Vector{Float64}}(undef, K)
     for b in 1:K
         sb = screened_volume_source(interface, sources[b], SharpScreening())
-        vals = TKM3D.ltkm3dc(volume_tol, sb.positions; charges = sb.weights .* sb.density,
-                             targets = targets, pgt = 1, kmax = _estimate_tkm3dc_kmax(sb))
-        vals.ier == 0 || error("TKM3D.ltkm3dc failed, ier=$(vals.ier)")
-        u_inc[b] = real.(vals.pottarg)
+        fld = PrecomputedVolumeField(sb; tol = volume_tol, c_pad = c_pad, compute_grad = false)
+        u_inc[b] = volume_field_potential(fld, targets)
     end
     tw = [sources[a].weights .* sources[a].density for a in 1:K]
     V = Matrix{Float64}(undef, K, K)
