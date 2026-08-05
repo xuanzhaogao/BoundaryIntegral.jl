@@ -1,7 +1,8 @@
 """
     PrecomputedVolumeField(vs; tol, kmax = nothing, c_pad = 5.0,
                            compute_pot = true, compute_grad = true,
-                           cache_fft = false, cache_fft_pad = 1.25)
+                           cache_fft = false, cache_fft_pad = 1.25,
+                           nthreads = TKM3D._ltkm_default_nthreads())
 
 Target-independent precomputed spectral representation of the free-space
 Laplace potential (`1/(4π r)` convention) of a `VolumeSource`, for evaluation
@@ -27,6 +28,14 @@ target-dependent Fourier box previously forced a fresh type-1 NUFFT + FFT
 plan at every refinement depth (~23 s per call on the production monolayer
 density; measured 16x build speedup with max rel deviation 1.4e-5 and no
 refinement-decision changes).
+
+`nthreads` caps the internal FINUFFT transforms (both the construction-time
+type-1 and every evaluation's type-2), mirroring `TKM3D.ltkm3dc`'s
+`_ltkm_default_nthreads()` default of 16 (override via env
+`TKM3D_FINUFFT_NTHREADS`): FINUFFT's default FFTW planner picks a
+pathological high-thread-count plan for these mode grids otherwise, and
+without this cap raising Julia's thread count degrades this path rather than
+speeding it up. The FMM branch (`lfmm3d`, out-of-box targets) is unaffected.
 
 Memory: `coeff` holds `prod(nmodes)` complex doubles and `grad_coeff` three
 times that (≈1 GB and ≈3 GB at the production kmax); construction with
@@ -64,6 +73,13 @@ struct PrecomputedVolumeField{T <: AbstractFloat}
     kmax::T
     tol::T
     prefactor::T
+    # Caps the internal FINUFFT transforms (construction's type-1 and each
+    # evaluation's type-2) at construction time, mirroring TKM3D.ltkm3dc's
+    # _ltkm_default_nthreads() default of 16: FINUFFT's default FFTW planner
+    # picks a pathological high-thread plan for these mode grids otherwise
+    # (TKM3D continuous.jl:197-203). Stored on the struct because evaluation
+    # (not just construction) issues FINUFFT calls.
+    nthreads::Int
     coeff::Union{Nothing, Array{Complex{T}, 3}}
     grad_coeff::Union{Nothing, Array{Complex{T}, 4}}
     # cache_fft mode: kernel-corrected fine-grid values for interp-only type-2
@@ -87,6 +103,7 @@ function PrecomputedVolumeField(
     compute_grad::Bool = true,
     cache_fft::Bool = false,
     cache_fft_pad::Real = 1.25,
+    nthreads::Integer = TKM3D._ltkm_default_nthreads(),
 ) where {T <: AbstractFloat}
     (compute_pot || compute_grad) || throw(ArgumentError("at least one of compute_pot or compute_grad must be true"))
     cache_fft_pad >= 1 || throw(ArgumentError("cache_fft_pad must be >= 1"))
@@ -108,7 +125,8 @@ function PrecomputedVolumeField(
     srcx = dks[1] .* (vec(view(sources, 1, :)) .- center[1])
     srcy = dks[2] .* (vec(view(sources, 2, :)) .- center[2])
     srcz = dks[3] .* (vec(view(sources, 3, :)) .- center[3])
-    coeff0 = TKM3D.FINUFFT.nufft3d1(srcx, srcy, srcz, complex.(charges), -1, tolT, nmodes...)
+    coeff0 = TKM3D.FINUFFT.nufft3d1(srcx, srcy, srcz, complex.(charges), -1, tolT, nmodes...;
+        nthreads = nthreads)
     coeff = ndims(coeff0) == 4 ? dropdims(coeff0; dims = 4) : coeff0
     @inbounds for iz in eachindex(kz), iy in eachindex(ky), ix in eachindex(kx)
         k = sqrt(kx[ix]^2 + ky[iy]^2 + kz[iz]^2)
@@ -126,7 +144,7 @@ function PrecomputedVolumeField(
     end
     return PrecomputedVolumeField{T}(
         sources, charges, geom,
-        nmodes, km, tolT, prefactor,
+        nmodes, km, tolT, prefactor, Int(nthreads),
         (compute_pot && !cache_fft) ? coeff : nothing,
         cache_fft ? nothing : grad_coeff,
         nfdim, pot_grid, grad_grid,
@@ -328,7 +346,7 @@ function volume_field_potential(f::PrecomputedVolumeField{T}, targets::AbstractM
         txn, tyn, tzn = _field_scaled_targets(f, trg, bidx)
         vals = f.pot_grid !== nothing ?
             vec(_field_interponly_type2(f, txn, tyn, tzn, f.pot_grid)) :
-            TKM3D._finufft_type2_eval_3d(txn, tyn, tzn, 1, f.tol, f.coeff)
+            TKM3D._finufft_type2_eval_3d(txn, tyn, tzn, 1, f.tol, f.coeff; nthreads = f.nthreads)
         for (k, i) in enumerate(bidx)
             out[i] = f.prefactor * real(vals[k])
         end
@@ -362,7 +380,7 @@ function volume_field_gradient(f::PrecomputedVolumeField{T}, targets::AbstractMa
         txn, tyn, tzn = _field_scaled_targets(f, trg, bidx)
         vals = f.grad_grid !== nothing ?
             _field_interponly_type2(f, txn, tyn, tzn, f.grad_grid) :
-            TKM3D._finufft_type2_eval_3d(txn, tyn, tzn, 1, f.tol, f.grad_coeff)
+            TKM3D._finufft_type2_eval_3d(txn, tyn, tzn, 1, f.tol, f.grad_coeff; nthreads = f.nthreads)
         for (k, i) in enumerate(bidx)
             out[1, i] = f.prefactor * real(vals[k, 1])
             out[2, i] = f.prefactor * real(vals[k, 2])
