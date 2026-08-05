@@ -69,10 +69,17 @@ function load_campaign(toml_path::AbstractString)
     end
 
     solve = Dict{String,Float64}(k => Float64(v) for (k, v) in d["solve"])
+    ev = get(d, "eval", Dict())
+    haskey(ev, "far_pad_steps") && error(
+        "$toml_path: [eval] far_pad_steps is no longer read (replaced by c_pad). " *
+        "far_pad_steps was an ABSOLUTE length in position units (e.g. 2.0 grid steps); " *
+        "c_pad is a DIMENSIONLESS multiple of the lattice spacing h = ||A_rho||_2 " *
+        "(default 5.0). These are not interchangeable values -- replace the key " *
+        "rather than renaming it, and re-check the intended near/far padding.")
     return CampaignInput(d["name"], d["root"], templates, orbitals, cutoff, overrides,
         Float64(get(di, "eps_out", 1.0)), boxes, epses, solve,
         Int(d["batching"]["n_centers_per_batch"]),
-        Float64(get(get(d, "eval", Dict()), "c_pad", 5.0)), toml_path)
+        Float64(get(ev, "c_pad", 5.0)), toml_path)
 end
 
 manifest_path(c::CampaignInput)  = joinpath(c.root, "manifest.tsv")

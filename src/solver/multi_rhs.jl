@@ -292,12 +292,26 @@ end
 Step 7 contraction: V[a,b] = ∫ ρ_a (u_inc[ρ_b] + u[σ_b]). No longer tied to
 SystemInput. Since Task 5's migration this shares the Section 3 near-field
 geometry (`near_field_geometry`/`PrecomputedVolumeField`) with
-`evaluate_batch_potential`, so it no longer independently checks the incident
-evaluation path; it still independently checks the contraction (direct
-`dot` against the raw densities/weights here vs. the store-based contraction
-there) and the corrected-FMM `pottrg` layer-potential path built at the
-group grid (`targets = sources[1].positions`, so every target is a source
-point and always inside `B_pad` — no far/FMM branch is exercised here).
+`evaluate_batch_potential`, so it is NOT an independent check of either the
+incident evaluation or the layer-potential evaluation: both this function and
+`evaluate_batch_potential` build the incident term the same way
+(`PrecomputedVolumeField` on the same screened source at the same `c_pad`)
+and both call `laplace3d_pottrg_fmm3d_corrected_hcubature` with identical
+arguments (`targets = sources[1].positions`, so every target is a source
+point and always inside `B_pad`).
+
+What comparing this against `evaluate_batch_potential` (see
+`test/solver/lattice_batch.jl`, "V via evaluate_batch_potential ==
+four_index_matrix") DOES check: index ordering and column mapping in the
+contraction. That test hand-rolls its own `V[a,bb] = dot(weights .*
+densities[:,a], Φ[:,bb])` next to this function's `V[a,b] = dot(tw[a], φb)` —
+two independently-written but not independently-evaluated contractions over
+the same `Φ`/`φ` values. A transposed `V[a,b]`, a column swapped with another
+source's column, or an off-by-one in `b`/`a` would still be caught (the
+result would be asymmetric, or `V != V^T`-detectably wrong even though `V` is
+in general symmetric), even though this is not a physics-independent check.
+`eval_batch_core`'s store-based contraction (a third implementation, over a
+different target/store structure) is never exercised by this comparison.
 """
 function four_index_matrix(interface, sources::Vector{<:VolumeSource{Float64, 3}},
         Σ::AbstractMatrix; lhs_tol::Float64, volume_tol::Float64, c_pad::Float64 = 5.0,

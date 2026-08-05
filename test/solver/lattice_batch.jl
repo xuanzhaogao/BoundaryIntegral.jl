@@ -60,9 +60,19 @@ using LinearAlgebra
     res_e = solve_dielectric_lattice_batch(c_e.boxes, c_e.epses, c_e.eps_out, b_e;
         n_quad = 4, rhs_atol = 1e-2, l_ec = 2.0, fmm_tol = 1e-6, gmres_rtol = 1e-8)
 
-    @testset "evaluate_batch_potential vs TKM (near targets)" begin
-        # targets: the batch's own support points only (all near — coarse fixture is under-resolved,
-        # so only a near-only comparison gives an apples-to-apples reference)
+    @testset "evaluate_batch_potential near-branch wiring" begin
+        # NOT a TKM/physics-agreement check (see the name change from the original
+        # "... vs TKM (near targets)"). Since GATE 2a this testset's reference calls
+        # PrecomputedVolumeField on the same screened source at the same c_pad as
+        # the code under test -- i.e. it is the same discretization, not an
+        # independent one. What it DOES still check: that evaluate_batch_potential's
+        # per-column loop selects the right source for each column, applies the
+        # right screening, and adds the layer potential to the right target
+        # indices/column -- a swapped source, a missed screening step, or a
+        # column/index mixup would still be caught here even though a genuine
+        # TKM-vs-spectral agreement check would not be. GATE 2's actual TKM
+        # agreement numbers (measured, not asserted here) are in the c_pad-bound
+        # testset below.
         targets = b_e.positions
 
         Φ = evaluate_batch_potential(res_e.interface, res_e.sigma, res_e.sources, targets;

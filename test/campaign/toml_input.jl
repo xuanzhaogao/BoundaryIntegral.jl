@@ -35,3 +35,27 @@ end
     c = load_campaign(joinpath(fixdir, "system_overrides.toml"))
     @test c.pair_overrides == [(1, 1), (1, 2)]
 end
+
+@testset "legacy far_pad_steps key is rejected, not silently reinterpreted" begin
+    # far_pad_steps was an absolute length (position units); c_pad is a dimensionless
+    # multiple of the lattice spacing. Silently falling back to the c_pad default
+    # would change a production campaign's near/far geometry without any signal.
+    fixdir = joinpath(@__DIR__, "..", "fixtures")
+    text = read(joinpath(fixdir, "system_small.toml"), String)
+    @assert occursin("c_pad = 5.0", text)
+    tmp = tempname() * ".toml"
+    write(tmp, replace(text, "c_pad = 5.0" => "far_pad_steps = 2.0"))
+    try
+        @test_throws ErrorException load_campaign(tmp)
+        err = try
+            load_campaign(tmp)
+            nothing
+        catch e
+            e
+        end
+        @test err isa ErrorException
+        @test occursin("far_pad_steps", err.msg) && occursin("c_pad", err.msg)
+    finally
+        rm(tmp; force = true)
+    end
+end

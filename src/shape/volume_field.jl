@@ -2,7 +2,7 @@
     PrecomputedVolumeField(vs; tol, kmax = nothing, c_pad = 5.0,
                            compute_pot = true, compute_grad = true,
                            cache_fft = false, cache_fft_pad = 1.25,
-                           nthreads = TKM3D._ltkm_default_nthreads())
+                           nthreads = min(TKM3D._ltkm_default_nthreads(), Sys.CPU_THREADS))
 
 Target-independent precomputed spectral representation of the free-space
 Laplace potential (`1/(4π r)` convention) of a `VolumeSource`, for evaluation
@@ -35,7 +35,13 @@ type-1 and every evaluation's type-2), mirroring `TKM3D.ltkm3dc`'s
 `TKM3D_FINUFFT_NTHREADS`): FINUFFT's default FFTW planner picks a
 pathological high-thread-count plan for these mode grids otherwise, and
 without this cap raising Julia's thread count degrades this path rather than
-speeding it up. The FMM branch (`lfmm3d`, out-of-box targets) is unaffected.
+speeding it up. The default additionally floors that 16 at `Sys.CPU_THREADS`
+so a small Slurm allocation (4-8 CPUs) doesn't oversubscribe — a strict
+improvement over `ltkm3dc`'s unconditional default, not a divergence from
+it; `Sys.CPU_THREADS` reports the machine total and can over-report inside a
+cgroup-limited allocation, so `TKM3D_FINUFFT_NTHREADS` remains the precise
+control for batch jobs. The FMM branch (`lfmm3d`, out-of-box targets) is
+unaffected.
 
 Memory: `coeff` holds `prod(nmodes)` complex doubles and `grad_coeff` three
 times that (≈1 GB and ≈3 GB at the production kmax); construction with
@@ -103,7 +109,13 @@ function PrecomputedVolumeField(
     compute_grad::Bool = true,
     cache_fft::Bool = false,
     cache_fft_pad::Real = 1.25,
-    nthreads::Integer = TKM3D._ltkm_default_nthreads(),
+    # min(...) so a small Slurm allocation (4-8 CPUs) doesn't oversubscribe:
+    # unlike ltkm3dc's unconditional _ltkm_default_nthreads(), this also caps at
+    # the machine's CPU count. Sys.CPU_THREADS reports the machine total and can
+    # over-report inside a cgroup-limited allocation, so TKM3D_FINUFFT_NTHREADS
+    # (read by _ltkm_default_nthreads()) remains the precise control for batch
+    # jobs; this is a floor safety net, not a substitute for setting it.
+    nthreads::Integer = min(TKM3D._ltkm_default_nthreads(), Sys.CPU_THREADS),
 ) where {T <: AbstractFloat}
     (compute_pot || compute_grad) || throw(ArgumentError("at least one of compute_pot or compute_grad must be true"))
     cache_fft_pad >= 1 || throw(ArgumentError("cache_fft_pad must be >= 1"))
