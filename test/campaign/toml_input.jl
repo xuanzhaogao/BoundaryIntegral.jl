@@ -17,7 +17,7 @@ using Test
     @test c.eps_out == 1.0
     @test c.solve["n_quad"] == 4 && c.solve["l_ec"] == 2.0
     @test c.n_centers_per_batch == 1
-    @test c.far_pad_steps == 2.0
+    @test c.c_pad == 5.0
 
     # template paths are resolved relative to the toml's directory; toml_path recorded
     @test isabspath(c.templates[1])

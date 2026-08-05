@@ -56,6 +56,8 @@ struct LatticeBatch
     positions::Matrix{Float64}           # 3 × n
     weights::Vector{Float64}             # n (uniform: |det cell| / (nx ny nz))
     densities::Matrix{Float64}           # n × K raw (unscreened) pair densities
+    # Primitive sampling-cell basis of the virtual global grid, for Eq. (3.3)'s h.
+    lattice_basis::Union{Nothing, NTuple{3, NTuple{3, Float64}}}
 end
 
 num_pairs(b::LatticeBatch) = length(b.pair_ids)
@@ -136,7 +138,11 @@ function assemble_lattice_batch(templates::AbstractVector,
     end
     At, Bt, Ct = true_cell_vectors(t1)
     w = abs(det(hcat(collect(At), collect(Bt), collect(Ct)))) / (nx * ny * nz)
-    return LatticeBatch(copy(pairs), gk, positions, fill(w, m), dk)
+    # primitive step vectors: the cell vectors divided by the grid counts
+    lb = ((At[1] / nx, At[2] / nx, At[3] / nx),
+          (Bt[1] / ny, Bt[2] / ny, Bt[3] / ny),
+          (Ct[1] / nz, Ct[2] / nz, Ct[3] / nz))
+    return LatticeBatch(copy(pairs), gk, positions, fill(w, m), dk, lb)
 end
 
 """
@@ -154,7 +160,7 @@ function envelope_volume_source(b::LatticeBatch)
         end
         env[s] = sqrt(acc)
     end
-    return VolumeSource(copy(b.positions), copy(b.weights), env)
+    return VolumeSource(copy(b.positions), copy(b.weights), env; lattice_basis = b.lattice_basis)
 end
 
 """
@@ -164,30 +170,27 @@ Split a LatticeBatch into the Vector{VolumeSource} core form (shared positions).
 """
 function batch_volume_sources(b::LatticeBatch)
     return VolumeSource{Float64, 3}[
-        VolumeSource(copy(b.positions), copy(b.weights), b.densities[:, k])
+        VolumeSource(copy(b.positions), copy(b.weights), b.densities[:, k];
+                     lattice_basis = b.lattice_basis)
         for k in 1:num_pairs(b)
     ]
 end
 
 """
     evaluate_batch_potential(interface, Σ, sources, targets;
-        lhs_tol, volume_tol, far_pad, range_factor=5.0) -> Φ (n_targets × K)
+        lhs_tol, volume_tol, c_pad=5.0, range_factor=5.0) -> Φ (n_targets × K)
 
 Total potential `Φ_a = u_inc[ρ_a] + u[σ_a]` of a solved batch at arbitrary targets.
 
 - `u[σ_a]`: corrected layer-potential map (FMM + hcubature near correction) built ONCE
   for the target set, applied per column of Σ.
-- `u_inc[ρ_a]`: batch-level near/far split on the shared support bounding box padded by
-  `far_pad`. Near targets: TKM volume potential per source (the combined source+target
-  box stays small — TKM's k-grid/truncation derive from that box, so feeding it
-  far-away targets would both inflate its cost and, on coarse data, shift its values).
-  Far targets: ONE `nd = K` point-charge FMM (potential/4π) over the screened
-  quadrature points — the trapezoidal far field of a compact density is accurate
-  (more accurate than TKM when the density is marginally resolved) since the far
-  field depends only on low moments. `far_pad` ≳ 2 grid steps.
+- `u_inc[rho_a]`: batch-level near/far split on the Section 3 padded near region
+  B_pad (Eq. 3.9), `h_n = c_pad * ||A_rho||_2`. Near targets: TKM via
+  PrecomputedVolumeField per source, on the paper's Fourier geometry
+  (Eqs. 3.11, 3.16). Far targets: ONE `nd = K` point-charge FMM (potential/4pi)
+  over the screened quadrature points.
 
-`far_pad` is an ABSOLUTE length in position units (supply ≈ 2 grid steps, e.g.
-`2 * max(|At|/nx, |Bt|/ny, |Ct|/nz)`).
+`c_pad` is DIMENSIONLESS, a multiple of the lattice spacing; default 5.0.
 
 All `sources` must share identical grid points (the batch convention); this is checked.
 
@@ -197,7 +200,7 @@ and is used without further scaling; the scattered layer potential is the output
 """
 function evaluate_batch_potential(interface, Σ::AbstractMatrix,
         sources::Vector{<:VolumeSource{Float64, 3}}, targets::Matrix{Float64};
-        lhs_tol::Float64, volume_tol::Float64, far_pad::Float64,
+        lhs_tol::Float64, volume_tol::Float64, c_pad::Float64 = 5.0,
         range_factor::Float64 = 5.0,
         screen_boxes::Union{Nothing, Vector{<:NamedTuple}} = nothing,
         screen_epses::Union{Nothing, Vector{Float64}} = nothing,
@@ -227,28 +230,24 @@ function evaluate_batch_potential(interface, Σ::AbstractMatrix,
         Φ[:, a] = pottrg * Σ[:, a]
     end
 
-    # incident part: near/far split on the shared support bounding box (screened[1].positions)
-    src_pos = screened[1].positions
-    src_lo = minimum(src_pos; dims = 2)
-    src_hi = maximum(src_pos; dims = 2)
-    near_idx = findall(i -> (targets[1, i] >= src_lo[1] - far_pad &&
-                             targets[1, i] <= src_hi[1] + far_pad &&
-                             targets[2, i] >= src_lo[2] - far_pad &&
-                             targets[2, i] <= src_hi[2] + far_pad &&
-                             targets[3, i] >= src_lo[3] - far_pad &&
-                             targets[3, i] <= src_hi[3] + far_pad), 1:nt)
+    # incident part: Section 3 near/far split (Eq. 3.9) on the screened source.
+    # screened_volume_source preserves positions, so the geometry is identical for
+    # every column and is built once.
+    geom = near_field_geometry(screened[1]; c_pad = c_pad)
+    near_idx = findall(i -> in_near_region(geom, targets, i), 1:nt)
     far_idx = setdiff(1:nt, near_idx)
 
-    # near targets: TKM per source (source+near box stays small)
+    # near targets: TKM via PrecomputedVolumeField, one column at a time.
+    # ltkm3dc cannot be used here: it derives its own truncation radius from the
+    # combined source+target box (TKM3D src/continuous.jl:133-146) and exposes no
+    # hook for Eq. (3.11)'s L. Building one field per column and discarding it
+    # keeps peak memory at a single coefficient array, matching the old call.
     if !isempty(near_idx)
         near_targets = targets[:, near_idx]
         for a in 1:K
-            sa = screened[a]
-            vals = TKM3D.ltkm3dc(volume_tol, sa.positions;
-                charges = sa.weights .* sa.density, targets = near_targets, pgt = 1,
-                kmax = _estimate_tkm3dc_kmax(sa))
-            vals.ier == 0 || error("TKM3D.ltkm3dc failed, ier=$(vals.ier)")
-            Φ[near_idx, a] .+= real.(vals.pottarg)
+            fld = PrecomputedVolumeField(screened[a];
+                tol = volume_tol, c_pad = c_pad, compute_grad = false)
+            Φ[near_idx, a] .+= volume_field_potential(fld, near_targets)
         end
     end
 

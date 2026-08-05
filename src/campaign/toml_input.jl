@@ -36,7 +36,7 @@ struct CampaignInput
     epses::Vector{Float64}
     solve::Dict{String,Float64}
     n_centers_per_batch::Int
-    far_pad_steps::Float64
+    c_pad::Float64
     toml_path::String                         # absolute path of the source .toml (workers reload from it)
 end
 
@@ -72,7 +72,7 @@ function load_campaign(toml_path::AbstractString)
     return CampaignInput(d["name"], d["root"], templates, orbitals, cutoff, overrides,
         Float64(get(di, "eps_out", 1.0)), boxes, epses, solve,
         Int(d["batching"]["n_centers_per_batch"]),
-        Float64(get(get(d, "eval", Dict()), "far_pad_steps", 2.0)), toml_path)
+        Float64(get(get(d, "eval", Dict()), "c_pad", 5.0)), toml_path)
 end
 
 manifest_path(c::CampaignInput)  = joinpath(c.root, "manifest.tsv")
