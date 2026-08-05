@@ -108,7 +108,7 @@ end
 
     rhs_field = BoundaryIntegral._rhs_volume_targets_field(field, targets, normals, 1.0)
 
-    is_near = BoundaryIntegral._classify_near_far_targets(targets, gsrc, h)
+    is_near = BoundaryIntegral._classify_near_far_targets(targets, gsrc)
     rhs_hyb, _, _ = BoundaryIntegral._rhs_volume_targets_hybrid(
         src, q, targets, normals, 1.0, 1e-6, kmax, is_near)
 

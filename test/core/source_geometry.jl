@@ -167,3 +167,23 @@ end
     @test vsf.lattice_basis === nothing
     @test isapprox(BI.lattice_spacing(vsf), h; rtol = 1e-12)
 end
+
+@testset "_classify_near_far_targets uses the Eq. (3.9) box" begin
+    gsrc = BI.GaussianVolumeSource((0.0, 0.0, 0.0), 0.3, 12, 1e-6)
+    g = BI.near_field_geometry(gsrc; c_pad = 5.0)
+
+    # A corner of B_pad is inside the box but far from every source point, so the
+    # old KDTree ball of radius 5h classified it FAR while Eq. (3.9) calls it NEAR.
+    corner = [g.hi[1] - 1e-9; g.hi[2] - 1e-9; g.hi[3] - 1e-9]
+    inside = [0.0; 0.0; 0.0]
+    outside = [g.hi[1] + g.hn; 0.0; 0.0]
+    targets = hcat(corner, inside, outside)
+
+    is_near = BI._classify_near_far_targets(targets, gsrc; c_pad = 5.0)
+    @test is_near == [true, true, false]
+
+    # agrees with in_near_region on every column, by construction
+    for i in 1:size(targets, 2)
+        @test is_near[i] == BI.in_near_region(g, targets, i)
+    end
+end

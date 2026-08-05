@@ -240,7 +240,7 @@ end
     @test h > 0.0
 
     panels_init = BI._box3d_rhs_adaptive_initial_panels(1.0, 1.0, 1.0, sqrt(2.0))
-    is_near = BI._classify_near_far_panels(panels_init, vs, h)
+    is_near = BI._classify_near_far_panels(panels_init, vs)
     @test any(is_near)   # source is near z=+0.5 face
     @test !all(is_near)  # source is far from z=-0.5 face
 end
@@ -252,7 +252,7 @@ end
     @test h > 0.0
 
     panels_init = BI._box3d_rhs_adaptive_initial_panels(1.0, 1.0, 1.0, sqrt(2.0))
-    is_near = BI._classify_near_far_panels(panels_init, vs_sparse, h)
+    is_near = BI._classify_near_far_panels(panels_init, vs_sparse)
     @test any(is_near)
     @test !all(is_near)
 end
@@ -272,8 +272,8 @@ end
     @test size(targets, 2) == length(panels) * n_per_panel
     @test size(normals, 2) == size(targets, 2)
 
-    is_near_panel = BI._classify_near_far_panels(panels, vs, h)
-    is_near_target = BI._classify_near_far_targets(targets, vs, h)
+    is_near_panel = BI._classify_near_far_panels(panels, vs)
+    is_near_target = BI._classify_near_far_targets(targets, vs)
 
     near_panel_ids = findall(is_near_panel)
     @test !isempty(near_panel_ids)
@@ -294,7 +294,7 @@ end
     ns, ws = BI.gausslegendre(4)
     panels = BI._box3d_rhs_adaptive_initial_panels(4.0, 4.0, 1.0, sqrt(2.0))
     targets, normals, n_per_panel = BI._rhs_panel3d_refinement_targets(panels, ns, ws)
-    expected_is_near = BI._classify_near_far_targets(targets, vs, h)
+    expected_is_near = BI._classify_near_far_targets(targets, vs)
     expected_near = count(expected_is_near)
     expected_far = size(targets, 2) - expected_near
     tkm_kmax = BI._estimate_tkm3dc_kmax(h)
@@ -376,7 +376,7 @@ end
     end
 
     h = BI._estimate_source_spacing(vs)
-    is_near = BI._classify_near_far_targets(targets, vs, h)
+    is_near = BI._classify_near_far_targets(targets, vs)
     @test any(is_near)
     @test !all(is_near)
 

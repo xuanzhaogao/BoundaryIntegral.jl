@@ -158,7 +158,7 @@ end
         targets[:, i] .= point.panel_point.point
     end
     h = BI._estimate_source_spacing(vs)
-    is_near = BI._classify_near_far_targets(targets, vs, h)
+    is_near = BI._classify_near_far_targets(targets, vs)
     @test any(is_near)
     @test !all(is_near)
 

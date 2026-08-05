@@ -82,40 +82,48 @@ function _estimate_tkm3dc_kmax(vs::VolumeSource{T, 3}) where T
     return _estimate_tkm3dc_kmax(_estimate_source_spacing(vs))
 end
 
-function _classify_near_far_panels(panels::Vector{TempPanel3D{T}}, vs::VolumeSource{T, 3}, h::T, h_factor::T = T(5)) where T
+# Quad centroids of `panels` as a 3 x n_panels matrix, in panel order. Shared by
+# _classify_near_far_panels and (indirectly, via the same layout) any caller that
+# needs the same representative point per panel.
+function _panel_representative_points(panels::Vector{TempPanel3D{T}}) where T
+    n_panels = length(panels)
+    pts = Matrix{T}(undef, 3, n_panels)
+    for (p, tpl) in enumerate(panels)
+        cc = (tpl.a .+ tpl.b .+ tpl.c .+ tpl.d) ./ 4
+        pts[1, p] = cc[1]
+        pts[2, p] = cc[2]
+        pts[3, p] = cc[3]
+    end
+    return pts
+end
+
+# Section 3 classification (Eq. 3.9): a panel/target is near iff its representative
+# point lies in B_pad. This replaces a KDTree ball of radius c_pad*h, which
+# disagreed with the paper near the corners of B_pad.
+function _classify_near_far_panels(panels::Vector{TempPanel3D{T}}, vs::VolumeSource{T, 3}; c_pad::Real = 5.0) where T
     n_panels = length(panels)
     is_near = fill(false, n_panels)
     n_sources = size(vs.positions, 2)
     n_sources == 0 && return is_near
 
-    tree = KDTree(vs.positions)
-    radius = h * h_factor
-
-    for (p, tpl) in enumerate(panels)
-        cc = (tpl.a .+ tpl.b .+ tpl.c .+ tpl.d) ./ 4
-        idxs = inrange(tree, collect(cc), radius)
-        if !isempty(idxs)
-            is_near[p] = true
-        end
+    g = near_field_geometry(vs; c_pad = c_pad)
+    pts = _panel_representative_points(panels)
+    for p in 1:n_panels
+        is_near[p] = in_near_region(g, pts, p)
     end
 
     return is_near
 end
 
-function _classify_near_far_targets(targets::Matrix{T}, vs::VolumeSource{T, 3}, h::T, h_factor::T = T(5)) where T
+function _classify_near_far_targets(targets::Matrix{T}, vs::VolumeSource{T, 3}; c_pad::Real = 5.0) where T
     n_targets = size(targets, 2)
     is_near = fill(false, n_targets)
     n_sources = size(vs.positions, 2)
     n_sources == 0 && return is_near
 
-    tree = KDTree(vs.positions)
-    radius = h * h_factor
-
+    g = near_field_geometry(vs; c_pad = c_pad)
     for i in 1:n_targets
-        idxs = inrange(tree, view(targets, :, i), radius)
-        if !isempty(idxs)
-            is_near[i] = true
-        end
+        is_near[i] = in_near_region(g, targets, i)
     end
     return is_near
 end
@@ -260,7 +268,7 @@ function _rhs_panel3d_resolved_volume_fmm(
     n_targets = size(targets, 2)
 
     sources, charges = _volume_source_fmm_sources(vs)
-    is_near_target = _classify_near_far_targets(targets, vs, h)
+    is_near_target = _classify_near_far_targets(targets, vs)
 
     rhs_vals, n_near, n_far = _rhs_volume_targets_hybrid(
         sources,
