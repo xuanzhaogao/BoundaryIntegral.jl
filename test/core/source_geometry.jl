@@ -187,3 +187,113 @@ end
         @test is_near[i] == BI.in_near_region(g, targets, i)
     end
 end
+
+@testset "all near/far paths agree on classification" begin
+    # One cubic and one skew lattice; every INDEPENDENTLY-written near/far
+    # implementation must classify identically. Of the near/far entry points
+    # that funnel through near_field_geometry (see src/core/source_geometry.jl
+    # header), this testset cross-checks three that each rebuild a geometry
+    # and re-run their own classification loop:
+    #   - BI._classify_near_far_targets       (src/shape/box3d_fmm_helpers.jl)
+    #   - BI._classify_near_far_panels        (src/shape/box3d_fmm_helpers.jl)
+    #   - PrecomputedVolumeField.in_field_box  (src/shape/volume_field.jl)
+    # against `ref`, computed here from a *separately* obtained geometry `g`
+    # and BI.in_near_region directly. A future edit that made any one of these
+    # call sites build its geometry from the wrong source, the wrong c_pad, or
+    # reintroduce the old KDTree-ball classifier would make it disagree with
+    # `ref` here, even though today all four paths happen to reduce to the
+    # same near_field_geometry + in_near_region computation.
+    #
+    # Two entry points are deliberately NOT cross-checked here:
+    #   - evaluate_batch_potential (src/solver/lattice_batch.jl:236-237) builds
+    #     its geom inline as `near_field_geometry(...); in_near_region(...)` --
+    #     textually the same two calls `ref` below makes, so comparing it here
+    #     would add no discriminating power over `ref` itself. It IS exercised
+    #     against physics-level TKM3D/PrecomputedVolumeField agreement in
+    #     test/solver/lattice_batch.jl ("near/far split consistency", "geometry
+    #     and the c_pad 2-vs-5 bound"), which is a stronger check than a
+    #     classification-only comparison would be.
+    #   - four_index_matrix (src/solver/multi_rhs.jl:326) constructs and
+    #     evaluates a PrecomputedVolumeField directly on the screened source --
+    #     it does not compute classification independently, it IS a
+    #     PrecomputedVolumeField call. Comparing its classification to
+    #     PrecomputedVolumeField's would compare that object to itself; a test
+    #     doing so would look like coverage without being any.
+    function cubic_source(n)
+        h = 2.0 / n
+        xs = collect(-1.0 + h/2 .+ h .* (0:n-1))
+        dens = Array{Float64,3}(undef, n, n, n)
+        for k in 1:n, j in 1:n, i in 1:n
+            r2 = xs[i]^2 + xs[j]^2 + xs[k]^2
+            dens[i,j,k] = exp(-r2 / (2 * 0.25^2))
+        end
+        return VolumeSource((xs, xs, xs), fill(h^3, n, n, n), dens)
+    end
+
+    function skew_source(n)
+        frac = collect((i - 1) / n for i in 1:n)
+        At = (2.0, 0.0, 0.0); Bt = (0.7, 1.9, 0.0); Ct = (0.0, 0.0, 2.2)
+        dens = fill(1.0, n, n, n)
+        jac = abs(det([2.0 0.7 0.0; 0.0 1.9 0.0; 0.0 0.0 2.2]))
+        return VolumeSource((frac, frac, frac), fill(jac / n^3, n, n, n), dens,
+                            (0.0, 0.0, 0.0), (At, Bt, Ct))
+    end
+
+    for vs in (cubic_source(12), skew_source(12))
+        g = BI.near_field_geometry(vs; c_pad = 5.0)
+        # a spread of targets straddling the B_pad boundary in every direction;
+        # f = 0.999/1.001 sit just inside/outside dB_pad and are what would catch
+        # an off-by-half-a-cell error in source_box if one path used it and
+        # another didn't.
+        pts = Float64[]
+        for sx in (-1.0, 0.0, 1.0), sy in (-1.0, 0.0, 1.0), sz in (-1.0, 0.0, 1.0)
+            for f in (0.5, 0.999, 1.001, 2.0)
+                append!(pts, [g.center[1] + sx * f * (g.hi[1] - g.center[1]),
+                              g.center[2] + sy * f * (g.hi[2] - g.center[2]),
+                              g.center[3] + sz * f * (g.hi[3] - g.center[3])])
+            end
+        end
+        targets = reshape(pts, 3, :)
+
+        ref = [BI.in_near_region(g, targets, i) for i in 1:size(targets, 2)]
+
+        # path: box3d target classifier
+        @test BI._classify_near_far_targets(targets, vs; c_pad = 5.0) == ref
+
+        # path: box3d panel classifier. _classify_near_far_panels first reduces
+        # each panel to a centroid (_panel_representative_points) and THEN
+        # applies the same near_field_geometry + in_near_region computation, so
+        # build degenerate panels whose centroid is exactly each target column
+        # (a = 4*target, b = c = d = 0, so (a+b+c+d)/4 == target bit-exactly --
+        # no floating-point reconstruction noise near the 0.999/1.001 boundary
+        # points) to exercise that centroid-extraction step, which
+        # _classify_near_far_targets does not go through at all.
+        panels = [BI.TempPanel3D(ntuple(k -> 4 * targets[k, i], 3),
+                                  (0.0, 0.0, 0.0), (0.0, 0.0, 0.0), (0.0, 0.0, 0.0),
+                                  false, false, false, false,
+                                  false, false, false, false,
+                                  (0.0, 0.0, 1.0))
+                   for i in 1:size(targets, 2)]
+        @test BI._classify_near_far_panels(panels, vs; c_pad = 5.0) == ref
+
+        # path: PrecomputedVolumeField
+        f = PrecomputedVolumeField(vs; tol = 1e-6, compute_grad = false, c_pad = 5.0)
+        @test [BI.in_field_box(f, targets, i) for i in 1:size(targets, 2)] == ref
+        # and its stored geometry is the same numbers, independently computed
+        @test f.geom.lo == g.lo && f.geom.hi == g.hi
+        @test f.geom.L == g.L && f.geom.dks == g.dks
+    end
+end
+
+@testset "cubic lattice: ||A_rho||_2 equals the old spacing estimate" begin
+    # Guarantees that results on cubic grids are unchanged by the h redefinition
+    # (Eq. 3.3's h = ||A_rho||_2 vs. the pre-Task-1 minimum-nearest-neighbour
+    # estimate): on a cubic grid the two must agree exactly, so lattice_spacing
+    # cannot silently move c_pad-derived quantities for the common case.
+    for n in (8, 13, 24)
+        h = 2.0 / n
+        xs = collect(-1.0 + h/2 .+ h .* (0:n-1))
+        vs = VolumeSource((xs, xs, xs), fill(h^3, n, n, n), fill(1.0, n, n, n))
+        @test isapprox(BI.lattice_spacing(vs), BI._estimate_source_spacing(vs); rtol = 1e-12)
+    end
+end
