@@ -21,7 +21,15 @@ struct VolumeSource{T, D} <: AbstractSource
     positions::Matrix{T}
     weights::Vector{T}
     density::Vector{T}
+    # Primitive sampling-cell basis A_rho (three column vectors), or `nothing` when
+    # the source is not a lattice. This is the paper's Eq. (3.2) basis: column j is
+    # the step vector along lattice direction j, i.e. (axis step) * (cell vector).
+    lattice_basis::Union{Nothing, NTuple{3, NTuple{3, T}}}
 end
+
+# 3-arg form: no lattice information.
+VolumeSource{T, D}(positions::Matrix{T}, weights::Vector{T}, density::Vector{T}) where {T, D} =
+    VolumeSource{T, D}(positions, weights, density, nothing)
 
 struct VolumeSourcePointInfo{T}
     point::NTuple{3, T}
@@ -108,13 +116,14 @@ function VolumeSource(
     weights::AbstractVector{T},
     density::AbstractVector{T};
     tol::Real = 0,
+    lattice_basis::Union{Nothing, NTuple{3, NTuple{3, T}}} = nothing,
 ) where {T}
     _validate_volume_source_flat(positions, weights, density)
     pos = Matrix{T}(positions)
     w = Vector{T}(weights)
     rho = Vector{T}(density)
     pos_t, w_t, rho_t = _truncate_volume_source(pos, w, rho, T(tol))
-    return VolumeSource{T, 3}(pos_t, w_t, rho_t)
+    return VolumeSource{T, 3}(pos_t, w_t, rho_t, lattice_basis)
 end
 
 function _volume_source_positions(
@@ -160,7 +169,8 @@ function VolumeSource{T, 3}(axes::NTuple{3, Vector{T}}, weights::Array{T, 3}, de
     basis = _identity_basis(T, Val(3))
     positions = _volume_source_positions(axes, origin, basis)
     w, rho = _flatten_volume_source_data(weights, density)
-    return VolumeSource(positions, w, rho; tol = tol)
+    return VolumeSource(positions, w, rho; tol = tol,
+                        lattice_basis = _primitive_basis(axes, basis))
 end
 
 function VolumeSource(axes::NTuple{3, Vector{T}}, weights::Array{T, 3}, density::Array{T, 3}; tol::Real = 0) where {T}
@@ -178,7 +188,8 @@ function VolumeSource(
     _validate_volume_source_grid(axes, weights, density)
     positions = _volume_source_positions(axes, origin, basis)
     w, rho = _flatten_volume_source_data(weights, density)
-    return VolumeSource(positions, w, rho; tol = tol)
+    return VolumeSource(positions, w, rho; tol = tol,
+                        lattice_basis = _primitive_basis(axes, basis))
 end
 
 function volume_source_point(vs::VolumeSource{T, 3}, idx::Int) where {T}
@@ -200,6 +211,39 @@ function _is_uniform_axis(axis::AbstractVector{T}; rtol::T = sqrt(eps(T)), atol:
         end
     end
     return true
+end
+
+"""
+    _primitive_basis(axes, basis) -> Union{Nothing, NTuple{3, NTuple{3, T}}}
+
+Primitive sampling-cell basis `A_rho` (Eq. 3.2): column `j` is `(axis j step) * basis[j]`.
+`axes` may hold fractional or absolute coordinates; `basis` holds the corresponding
+cell vectors. Returns `nothing` unless all three axes are uniform with >= 2 points,
+in which case the samples do not form a lattice.
+"""
+function _primitive_basis(
+    axes::NTuple{3, Vector{T}},
+    basis::NTuple{3, NTuple{3, T}},
+) where {T}
+    steps = ntuple(3) do d
+        ax = axes[d]
+        (length(ax) >= 2 && _is_uniform_axis(ax)) ? (ax[2] - ax[1]) : nothing
+    end
+    any(isnothing, steps) && return nothing
+    return ntuple(d -> ntuple(i -> T(steps[d]) * basis[d][i], 3), 3)
+end
+
+"""
+    with_density(vs, density) -> VolumeSource
+
+Copy of `vs` with `density` replaced, preserving positions, weights, and
+`lattice_basis`. Use this instead of rebuilding through the flat constructor,
+which would silently drop the lattice basis.
+"""
+function with_density(vs::VolumeSource{T, 3}, density::Vector{T}) where {T}
+    length(density) == length(vs.density) ||
+        throw(ArgumentError("density length must match the source"))
+    return VolumeSource{T, 3}(copy(vs.positions), copy(vs.weights), density, vs.lattice_basis)
 end
 
 function VolumeSource(points::Vector{NTuple{3, T}}, weights::Vector{T}, density::Vector{T}; tol::Real = 0) where {T}
@@ -340,7 +384,7 @@ function screened_volume_source(
     min_corner = (-Lx / 2, -Ly / 2, -Lz / 2)
     max_corner = (Lx / 2, Ly / 2, Lz / 2)
     rho = _screened_volume_density(vs, min_corner, max_corner, eps_in, eps_out, mode, tol)
-    return VolumeSource(copy(vs.positions), copy(vs.weights), rho)
+    return with_density(vs, rho)
 end
 
 function screened_volume_source(
@@ -358,7 +402,7 @@ function screened_volume_source(
     min_corner, max_corner = _interface_box_bounds(interface)
     eps_in, eps_out = _uniform_interface_eps(interface)
     rho = _screened_volume_density(vs, min_corner, max_corner, eps_in, eps_out, mode, tol)
-    return VolumeSource(copy(vs.positions), copy(vs.weights), rho)
+    return with_density(vs, rho)
 end
 
 function _screened_volume_density_multibox(
@@ -467,7 +511,7 @@ function screened_volume_source(
 ) where {T}
     length(boxes) == length(epses) || throw(ArgumentError("Number of boxes must match number of permittivities"))
     rho = _screened_volume_density_multibox(vs, boxes, epses, eps_out, mode, tol)
-    return VolumeSource(copy(vs.positions), copy(vs.weights), rho)
+    return with_density(vs, rho)
 end
 
 function GaussianVolumeSource(center::NTuple{3, T}, σ::T, n::Int, tol::T) where T

@@ -306,18 +306,17 @@ against every stored pair density. Returns `(br.pair_ids, nP × K Matrix)`. No f
 function eval_batch_core(br::BatchResult, targets, store, dg, c::CampaignInput)
     K = length(br.pair_ids)
     pos = grid_positions(dg, br.gidx)
-    sources = [VolumeSource(copy(pos), copy(br.weights), br.densities[:, k]) for k in 1:K]
-
     At, Bt, Ct = true_cell_vectors(dg)
-    max_step = maximum((norm(collect(At)) / dg.nx,
-                        norm(collect(Bt)) / dg.ny,
-                        norm(collect(Ct)) / dg.nz))
-    far_pad = c.far_pad_steps * max_step
+    lb = ((At[1] / dg.nx, At[2] / dg.nx, At[3] / dg.nx),
+          (Bt[1] / dg.ny, Bt[2] / dg.ny, Bt[3] / dg.ny),
+          (Ct[1] / dg.nz, Ct[2] / dg.nz, Ct[3] / dg.nz))
+    sources = [VolumeSource(copy(pos), copy(br.weights), br.densities[:, k];
+                            lattice_basis = lb) for k in 1:K]
 
     Φ = evaluate_batch_potential(br.interface, br.sigma, sources, targets.positions;
         lhs_tol   = c.solve["lhs_tol"],
         volume_tol = c.solve["volume_tol"],
-        far_pad    = far_pad,
+        c_pad      = c.c_pad,
         screen_boxes = c.boxes, screen_epses = c.epses, screen_eps_out = c.eps_out)
 
     nP = length(store.pair_ids)

@@ -90,7 +90,7 @@ function write_fixture_campaign(dir::AbstractString)
         println(io, "n_centers_per_batch = 1")
         println(io, "")
         println(io, "[eval]")
-        println(io, "far_pad_steps = 2.0")
+        println(io, "c_pad = 5.0")
     end
     return toml
 end

@@ -1,15 +1,17 @@
 """
-    PrecomputedVolumeField(vs; tol, kmax = nothing, margin_h = 5.0,
+    PrecomputedVolumeField(vs; tol, kmax = nothing, c_pad = 5.0,
                            compute_pot = true, compute_grad = true,
-                           cache_fft = false, cache_fft_pad = 1.25)
+                           cache_fft = false, cache_fft_pad = 1.25,
+                           nthreads = min(TKM3D._ltkm_default_nthreads(), Sys.CPU_THREADS))
 
 Target-independent precomputed spectral representation of the free-space
 Laplace potential (`1/(4π r)` convention) of a `VolumeSource`, for evaluation
 at many target batches without redoing per-call setup.
 
-Construction (once): fix the evaluation box B = source bounding box extended
-by `margin_h * h` (`h` = mean source spacing); on the Fourier box determined
-by B alone, run the type-1 NUFFT of all source charges, apply the truncated
+Construction (once): fix the evaluation box B_pad = source box B (Eq. 3.7)
+padded by `c_pad * h` where `h = ||A_rho||_2` (Eq. 3.3); the Fourier box
+follows Eqs. (3.11) and (3.16) via `near_field_geometry`. On that Fourier
+box, run the type-1 NUFFT of all source charges, apply the truncated
 Laplace kernel `TKM3D.truncated_laplace3d_hat`, and (optionally) materialize
 the spectral gradient coefficients.
 
@@ -26,6 +28,20 @@ target-dependent Fourier box previously forced a fresh type-1 NUFFT + FFT
 plan at every refinement depth (~23 s per call on the production monolayer
 density; measured 16x build speedup with max rel deviation 1.4e-5 and no
 refinement-decision changes).
+
+`nthreads` caps the internal FINUFFT transforms (both the construction-time
+type-1 and every evaluation's type-2), mirroring `TKM3D.ltkm3dc`'s
+`_ltkm_default_nthreads()` default of 16 (override via env
+`TKM3D_FINUFFT_NTHREADS`): FINUFFT's default FFTW planner picks a
+pathological high-thread-count plan for these mode grids otherwise, and
+without this cap raising Julia's thread count degrades this path rather than
+speeding it up. The default additionally floors that 16 at `Sys.CPU_THREADS`
+so a small Slurm allocation (4-8 CPUs) doesn't oversubscribe — a strict
+improvement over `ltkm3dc`'s unconditional default, not a divergence from
+it; `Sys.CPU_THREADS` reports the machine total and can over-report inside a
+cgroup-limited allocation, so `TKM3D_FINUFFT_NTHREADS` remains the precise
+control for batch jobs. The FMM branch (`lfmm3d`, out-of-box targets) is
+unaffected.
 
 Memory: `coeff` holds `prod(nmodes)` complex doubles and `grad_coeff` three
 times that (≈1 GB and ≈3 GB at the production kmax); construction with
@@ -58,14 +74,18 @@ coexist before the coefficient arrays are released (~16 GB at production scale).
 struct PrecomputedVolumeField{T <: AbstractFloat}
     sources::Matrix{T}
     charges::Vector{T}
-    lo::NTuple{3, T}
-    hi::NTuple{3, T}
-    center::NTuple{3, T}
-    dks::NTuple{3, T}
+    geom::NearFieldGeometry{T}
     nmodes::NTuple{3, Int}
     kmax::T
     tol::T
     prefactor::T
+    # Caps the internal FINUFFT transforms (construction's type-1 and each
+    # evaluation's type-2) at construction time, mirroring TKM3D.ltkm3dc's
+    # _ltkm_default_nthreads() default of 16: FINUFFT's default FFTW planner
+    # picks a pathological high-thread plan for these mode grids otherwise
+    # (TKM3D continuous.jl:197-203). Stored on the struct because evaluation
+    # (not just construction) issues FINUFFT calls.
+    nthreads::Int
     coeff::Union{Nothing, Array{Complex{T}, 3}}
     grad_coeff::Union{Nothing, Array{Complex{T}, 4}}
     # cache_fft mode: kernel-corrected fine-grid values for interp-only type-2
@@ -84,28 +104,31 @@ function PrecomputedVolumeField(
     vs::VolumeSource{T, 3};
     tol::Real,
     kmax::Union{Nothing, Real} = nothing,
-    margin_h::Real = 5.0,
+    c_pad::Real = 5.0,
     compute_pot::Bool = true,
     compute_grad::Bool = true,
     cache_fft::Bool = false,
     cache_fft_pad::Real = 1.25,
+    # min(...) so a small Slurm allocation (4-8 CPUs) doesn't oversubscribe:
+    # unlike ltkm3dc's unconditional _ltkm_default_nthreads(), this also caps at
+    # the machine's CPU count. Sys.CPU_THREADS reports the machine total and can
+    # over-report inside a cgroup-limited allocation, so TKM3D_FINUFFT_NTHREADS
+    # (read by _ltkm_default_nthreads()) remains the precise control for batch
+    # jobs; this is a floor safety net, not a substitute for setting it.
+    nthreads::Integer = min(TKM3D._ltkm_default_nthreads(), Sys.CPU_THREADS),
 ) where {T <: AbstractFloat}
     (compute_pot || compute_grad) || throw(ArgumentError("at least one of compute_pot or compute_grad must be true"))
     cache_fft_pad >= 1 || throw(ArgumentError("cache_fft_pad must be >= 1"))
     tolT = T(tol)
     tolT > zero(T) || throw(ArgumentError("tol must be positive"))
     sources, charges = _volume_source_fmm_sources(vs)
-    h = _estimate_source_spacing(vs)
-    km = isnothing(kmax) ? T(_estimate_tkm3dc_kmax(h)) : T(kmax)
+    geom = near_field_geometry(vs; c_pad = c_pad)
+    # k_max keeps the min-nearest-neighbour spacing: Section 3.3 leaves k_Nyq open
+    # for a general lattice, so only h_n is pinned to Eq. (3.3)'s ||A_rho||_2.
+    km = isnothing(kmax) ? T(_estimate_tkm3dc_kmax(_estimate_source_spacing(vs))) : T(kmax)
     km > zero(T) || throw(ArgumentError("kmax must be positive"))
-
-    m = T(margin_h) * h
-    lo = ntuple(d -> minimum(view(sources, d, :)) - m, 3)
-    hi = ntuple(d -> maximum(view(sources, d, :)) + m, 3)
-    corners = T[lo[1] hi[1]; lo[2] hi[2]; lo[3] hi[3]]
-    lengths, center = TKM3D.combined_box_geometry_3xn(sources, corners)
-    Lbig = sqrt(sum(abs2, lengths))
-    dks = ntuple(d -> prevfloat(T(2π) / (lengths[d] + Lbig)), 3)
+    center = geom.center
+    dks = geom.dks
     kx = TKM3D.centered_mode_axis(dks[1], km)
     ky = TKM3D.centered_mode_axis(dks[2], km)
     kz = TKM3D.centered_mode_axis(dks[3], km)
@@ -114,12 +137,13 @@ function PrecomputedVolumeField(
     srcx = dks[1] .* (vec(view(sources, 1, :)) .- center[1])
     srcy = dks[2] .* (vec(view(sources, 2, :)) .- center[2])
     srcz = dks[3] .* (vec(view(sources, 3, :)) .- center[3])
-    coeff0 = TKM3D.FINUFFT.nufft3d1(srcx, srcy, srcz, complex.(charges), -1, tolT, nmodes...)
+    coeff0 = TKM3D.FINUFFT.nufft3d1(srcx, srcy, srcz, complex.(charges), -1, tolT, nmodes...;
+        nthreads = nthreads)
     coeff = ndims(coeff0) == 4 ? dropdims(coeff0; dims = 4) : coeff0
     @inbounds for iz in eachindex(kz), iy in eachindex(ky), ix in eachindex(kx)
         k = sqrt(kx[ix]^2 + ky[iy]^2 + kz[iz]^2)
         coeff[ix, iy, iz] = k <= km ?
-            coeff[ix, iy, iz] * TKM3D.truncated_laplace3d_hat(k, Lbig) :
+            coeff[ix, iy, iz] * TKM3D.truncated_laplace3d_hat(k, geom.L) :
             zero(eltype(coeff))
     end
     grad_coeff = compute_grad ? TKM3D._spectral_gradient_coeffs_3d(coeff, kx, ky, kz) : nothing
@@ -131,8 +155,8 @@ function PrecomputedVolumeField(
             _field_cache_fft_grids(coeff, grad_coeff, tolT, T(cache_fft_pad), compute_pot)
     end
     return PrecomputedVolumeField{T}(
-        sources, charges, lo, hi, (center[1], center[2], center[3]),
-        dks, nmodes, km, tolT, prefactor,
+        sources, charges, geom,
+        nmodes, km, tolT, prefactor, Int(nthreads),
         (compute_pot && !cache_fft) ? coeff : nothing,
         cache_fft ? nothing : grad_coeff,
         nfdim, pot_grid, grad_grid,
@@ -302,14 +326,14 @@ function _field_interponly_type2(
 end
 
 @inline in_field_box(f::PrecomputedVolumeField, targets::AbstractMatrix, i::Integer) =
-    (f.lo[1] <= targets[1, i] <= f.hi[1]) &&
-    (f.lo[2] <= targets[2, i] <= f.hi[2]) &&
-    (f.lo[3] <= targets[3, i] <= f.hi[3])
+    in_near_region(f.geom, targets, i)
 
 function _field_scaled_targets(f::PrecomputedVolumeField{T}, targets, idxs) where {T}
-    txn = T[f.dks[1] * (targets[1, i] - f.center[1]) for i in idxs]
-    tyn = T[f.dks[2] * (targets[2, i] - f.center[2]) for i in idxs]
-    tzn = T[f.dks[3] * (targets[3, i] - f.center[3]) for i in idxs]
+    dks = f.geom.dks
+    c = f.geom.center
+    txn = T[dks[1] * (targets[1, i] - c[1]) for i in idxs]
+    tyn = T[dks[2] * (targets[2, i] - c[2]) for i in idxs]
+    tzn = T[dks[3] * (targets[3, i] - c[3]) for i in idxs]
     return txn, tyn, tzn
 end
 
@@ -334,7 +358,7 @@ function volume_field_potential(f::PrecomputedVolumeField{T}, targets::AbstractM
         txn, tyn, tzn = _field_scaled_targets(f, trg, bidx)
         vals = f.pot_grid !== nothing ?
             vec(_field_interponly_type2(f, txn, tyn, tzn, f.pot_grid)) :
-            TKM3D._finufft_type2_eval_3d(txn, tyn, tzn, 1, f.tol, f.coeff)
+            TKM3D._finufft_type2_eval_3d(txn, tyn, tzn, 1, f.tol, f.coeff; nthreads = f.nthreads)
         for (k, i) in enumerate(bidx)
             out[i] = f.prefactor * real(vals[k])
         end
@@ -368,7 +392,7 @@ function volume_field_gradient(f::PrecomputedVolumeField{T}, targets::AbstractMa
         txn, tyn, tzn = _field_scaled_targets(f, trg, bidx)
         vals = f.grad_grid !== nothing ?
             _field_interponly_type2(f, txn, tyn, tzn, f.grad_grid) :
-            TKM3D._finufft_type2_eval_3d(txn, tyn, tzn, 1, f.tol, f.grad_coeff)
+            TKM3D._finufft_type2_eval_3d(txn, tyn, tzn, 1, f.tol, f.grad_coeff; nthreads = f.nthreads)
         for (k, i) in enumerate(bidx)
             out[1, i] = f.prefactor * real(vals[k, 1])
             out[2, i] = f.prefactor * real(vals[k, 2])

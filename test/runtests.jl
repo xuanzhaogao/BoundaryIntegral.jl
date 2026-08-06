@@ -17,6 +17,7 @@ using Test
     # core
     include("core/panels.jl")
     include("core/sources.jl")
+    include("core/source_geometry.jl")
     include("shape/volume_field.jl")
 
     # kernel functions
@@ -48,6 +49,7 @@ using Test
     include("campaign/geometry.jl")
     include("campaign/manifest.jl")
     include("campaign/v_output.jl")
+    include("campaign/tasks.jl")
     if run_full
         include("campaign/pipeline.jl")
         include("campaign/distributed_ext.jl")

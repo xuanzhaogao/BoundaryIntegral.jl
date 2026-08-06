@@ -32,3 +32,7 @@ include("fixture_campaign.jl")
         @test maximum(abs.(res.V .- Vb)) < 1e-8 * max(maximum(abs.(Vb)), eps())
     end
 end
+
+# "eval_batch_core propagates lattice_basis on a skewed grid" moved to
+# test/campaign/tasks.jl (unconditional -- this file only runs under
+# BI_RUN_FULL_TESTS=1, and that regression guard needs to run in CI).

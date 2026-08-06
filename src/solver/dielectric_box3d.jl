@@ -165,12 +165,12 @@ function rhs_dielectric_box3d_hybrid(
     eps_src::Float64,
     fmm_tol::Float64;
     tkm_kmax::Union{Nothing, Float64} = nothing,
-    h_factor::Float64 = 5.0,
+    c_pad::Float64 = 5.0,
 ) where {P <: AbstractPanel}
     n_points = num_points(interface)
     n_sources = length(vs.density)
     n_sources == 0 && return zeros(Float64, n_points)
-    h_factor > 0 || throw(ArgumentError("h_factor must be positive"))
+    c_pad > 0 || throw(ArgumentError("c_pad must be positive"))
 
     sources, charges = _volume_source_fmm_sources(vs)
 
@@ -179,7 +179,7 @@ function rhs_dielectric_box3d_hybrid(
     h = _estimate_source_spacing(vs)
     resolved_tkm_kmax = isnothing(tkm_kmax) ? _estimate_tkm3dc_kmax(h) : tkm_kmax
     resolved_tkm_kmax > 0 || throw(ArgumentError("tkm_kmax must be positive"))
-    is_near = _classify_near_far_targets(targets, vs, h, h_factor)
+    is_near = _classify_near_far_targets(targets, vs; c_pad = c_pad)
     rhs, n_near, n_far = _rhs_volume_targets_hybrid(
         sources,
         charges,
@@ -250,7 +250,7 @@ function rhs_dielectric_box3d_hybrid(
     vs::VolumeSource{Float64, 3},
     fmm_tol::Float64;
     tkm_kmax::Union{Nothing, Float64} = nothing,
-    h_factor::Float64 = 5.0,
+    c_pad::Float64 = 5.0,
 ) where {P <: FlatPanel{Float64, 3}}
-    return rhs_dielectric_box3d_hybrid(interface, screened_volume_source(boxes, epses, eps_out, vs, SharpScreening()), 1.0, fmm_tol; tkm_kmax = tkm_kmax, h_factor = h_factor)
+    return rhs_dielectric_box3d_hybrid(interface, screened_volume_source(boxes, epses, eps_out, vs, SharpScreening()), 1.0, fmm_tol; tkm_kmax = tkm_kmax, c_pad = c_pad)
 end

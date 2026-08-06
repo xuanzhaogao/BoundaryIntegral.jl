@@ -100,7 +100,7 @@ max_depth = 128
 n_centers_per_batch = 1
 
 [eval]
-far_pad_steps = 2.0
+c_pad = 5.0
 ```
 
 Parsed into a `CampaignInput` struct (the merged successor to both `Campaign` and
