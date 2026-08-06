@@ -167,6 +167,22 @@ using LinearAlgebra
     end
 
     @testset "V via evaluate_batch_potential == four_index_matrix" begin
+        # NOT an independent cross-check (see src/solver/multi_rhs.jl's
+        # `four_index_matrix` docstring, which points here). Since Task 5's
+        # migration, both sides build the incident term the same way --
+        # `PrecomputedVolumeField` on the same screened source at the same
+        # `c_pad` -- and both call `laplace3d_pottrg_fmm3d_corrected_hcubature`
+        # with identical arguments for the layer term. The incident and layer
+        # code paths are therefore identical, and the measured difference
+        # between `V` and `V_ref` below is exactly 0.0 by construction, not an
+        # agreement demonstrated by this test. What this test still genuinely
+        # verifies is contraction index ordering and column mapping: `V` is
+        # hand-rolled here as `dot(weights .* densities[:, a], Φ[:, bb])`
+        # while `four_index_matrix` computes its own `V[a, b]` internally, so
+        # a transposed or mis-mapped `V[a, b]` would still be caught here --
+        # `V` is not symmetric, so such a bug would not cancel out. The 1e-6
+        # tolerance is kept as a harmless upper bound on the (exactly zero)
+        # difference.
         V_ref = four_index_matrix(res_e.interface, res_e.sources, res_e.sigma;
                                   lhs_tol = 1e-6, volume_tol = 1e-8)
         targets = b_e.positions                        # the group grid = what four_index uses
@@ -273,8 +289,18 @@ using LinearAlgebra
         scale_g = maximum(abs.(Φ5_g))
         bound_g = maximum(abs.(Φ2_g .- Φ5_g)) / scale_g
         @info "c_pad 2 vs 5 (WELL-RESOLVED source, THE GATE): max relative difference in Phi = $bound_g"
-        # Measured 1.7e-7; 1e-5 leaves ample headroom without being vacuous. This is
-        # the number that licenses skipping the Section 6.4 rerun.
+        # Measured 1.7e-7; 1e-5 leaves ample headroom without being vacuous.
+        # This bounds only the c_pad component of the un-rerun Section 6.4
+        # change (2 -> 5, on a well-resolved source). It is NOT the whole
+        # story: the near branch also swapped evaluators, from a direct
+        # TKM3D.ltkm3dc call (Fourier box from the combined source+target
+        # bounding box) to PrecomputedVolumeField (the paper's Eq. 3.11/3.16
+        # box). That second, separate component is bounded at <1e-5 by the
+        # "near/far split consistency (well-resolved source)" testset above.
+        # The conclusion (Section 6.4 need not be rerun) is unchanged either
+        # way: both components are far below Section 6.4's quoted precision
+        # (its symmetry residual is 4.3e-3), giving ~400x margin on the
+        # looser of the two (1e-5 vs 4.3e-3).
         @test bound_g < 1e-5
 
         # far_pad is gone
