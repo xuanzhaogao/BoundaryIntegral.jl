@@ -36,9 +36,23 @@ struct CampaignInput
     epses::Vector{Float64}
     solve::Dict{String,Float64}
     n_centers_per_batch::Int
+    # [batching] k_target: partition the pairs into batches of ~k_target PAIRS, spatially
+    # grouped (see build_batches), instead of a fixed anchor count. `nothing` keeps the old
+    # n_centers_per_batch behaviour. Each batch pays one interface build, one corrected LHS
+    # operator and one pottrg map regardless of K, so the batch COUNT drives the fixed cost;
+    # 31 is the measured throughput optimum on the Sec. 5.2 benchmark.
+    k_target::Union{Nothing,Int}
     c_pad::Float64
     toml_path::String                         # absolute path of the source .toml (workers reload from it)
 end
+
+# Field-order-compatible constructor for callers written before `k_target` existed: it lands
+# between n_centers_per_batch and c_pad, so every positional call would otherwise break.
+# Defaults to `nothing`, i.e. the previous anchor-count batching.
+CampaignInput(name, root, templates, orbitals, neighbor_cutoff, pair_overrides, eps_out,
+              boxes, epses, solve, n_centers_per_batch, c_pad::Float64, toml_path::String) =
+    CampaignInput(name, root, templates, orbitals, neighbor_cutoff, pair_overrides, eps_out,
+                  boxes, epses, solve, n_centers_per_batch, nothing, c_pad, toml_path)
 
 function load_campaign(toml_path::AbstractString)
     toml_path = abspath(toml_path)
@@ -79,6 +93,7 @@ function load_campaign(toml_path::AbstractString)
     return CampaignInput(d["name"], d["root"], templates, orbitals, cutoff, overrides,
         Float64(get(di, "eps_out", 1.0)), boxes, epses, solve,
         Int(d["batching"]["n_centers_per_batch"]),
+        haskey(d["batching"], "k_target") ? Int(d["batching"]["k_target"]) : nothing,
         Float64(get(ev, "c_pad", 5.0)), toml_path)
 end
 

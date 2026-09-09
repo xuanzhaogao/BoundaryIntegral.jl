@@ -10,7 +10,7 @@ using Sockets
 # ---------------------------------------------------------------------------
 
 _params_string(c::CampaignInput) =
-    "norb=$(length(c.orbitals)) cutoff=$(c.neighbor_cutoff) n_per_batch=$(c.n_centers_per_batch) overrides=$(c.pair_overrides)"
+    "norb=$(length(c.orbitals)) cutoff=$(c.neighbor_cutoff) n_per_batch=$(c.n_centers_per_batch) k_target=$(c.k_target) overrides=$(c.pair_overrides)"
 
 # Manifest derivation shared by `prepare` (file-based) and `four_index_integrals`
 # (in-memory): centers, neighbor pairs (or explicit overrides), and batches.
@@ -18,7 +18,9 @@ function _centers_pairs_batches(c::CampaignInput)
     centers = enumerate_centers(c)
     pairs   = c.pair_overrides === nothing ?
         enumerate_pairs(centers, c.neighbor_cutoff) : c.pair_overrides
-    batches = build_batches(pairs, c.n_centers_per_batch)
+    batches = c.k_target === nothing ?
+        build_batches(pairs, c.n_centers_per_batch) :
+        build_batches(pairs, centers, c.k_target)
     return centers, pairs, batches
 end
 
@@ -85,18 +87,23 @@ end
 # V file helpers
 # ---------------------------------------------------------------------------
 
-const V_FORMAT_VERSION = 1
+# v2 adds `rows`: the global pair indices this block covers. A block no longer spans every
+# pair, because symmetry lets each batch evaluate only the rows it owes (see _triangle_rows).
+const V_FORMAT_VERSION = 2
 
 function save_v_rows(path::AbstractString, batch_id::Int,
         source_pairs::Vector{Tuple{Int,Int}}, target_pairs::Vector{Tuple{Int,Int}},
-        V::Matrix{Float64}, stats::Dict{String,Any})
+        V::Matrix{Float64}, stats::Dict{String,Any}; rows::Vector{Int})
     _atomic_serialize(path, (; version = V_FORMAT_VERSION, batch_id,
-        source_pairs, target_pairs, V, stats))
+        source_pairs, target_pairs, rows, V, stats))
 end
 
 function load_v_rows(path::AbstractString)
     vr = open(deserialize, path)
-    vr.version == V_FORMAT_VERSION || error("$path: V format version mismatch")
+    vr.version == V_FORMAT_VERSION ||
+        error("$path: V format version $(vr.version), expected $(V_FORMAT_VERSION). " *
+              "v1 blocks span every pair; v2 blocks carry `rows`. Re-run the eval phase " *
+              "for this campaign (delete its V_*.jls) rather than mixing formats.")
     size(vr.V) == (length(vr.target_pairs), length(vr.source_pairs)) ||
         error("$path: V shape mismatch")
     return vr
@@ -298,12 +305,41 @@ end
 # ---------------------------------------------------------------------------
 
 """
-    eval_batch_core(br, targets, store, dg, c) -> (source_pairs, V)
+    _triangle_rows(store, source_pairs) -> Vector{Int}
 
-Evaluate `Φ_a = u_inc[ρ_a] + u[σ_a]` at the shared target set `T`, then contract
-against every stored pair density. Returns `(br.pair_ids, nP × K Matrix)`. No file IO.
+Global pair rows this batch must evaluate, exploiting V[a,b] = V[b,a].
+
+V is symmetric (a Coulomb integral between two pair densities), so only one triangle need be
+computed; `assemble_v` mirrors the rest. For a source pair at global column `cs` the batch owes
+rows `>= cs`, so over the whole batch it owes rows `>= min(cs)`. Everything below that is
+supplied by other batches' columns through the mirror.
+
+The saving is NOT in the contractions -- those are cheap dot products -- but in Phi: dropping
+those rows drops their target points from the evaluation entirely, and Phi is the whole cost.
+It is only a real saving when the global pair order tracks the batch order, so that successive
+batches owe successively fewer rows; `consolidate` writes `pair_ids` in manifest batch order,
+which is exactly that.
 """
-function eval_batch_core(br::BatchResult, targets, store, dg, c::CampaignInput)
+function _triangle_rows(store, source_pairs::Vector{Tuple{Int,Int}})
+    col = Dict(p => i for (i, p) in enumerate(store.pair_ids))
+    lo = minimum(col[p] for p in source_pairs)
+    return lo:length(store.pair_ids)
+end
+
+"""
+    eval_batch_core(br, targets, store, dg, c; triangle = true) -> (source_pairs, V, rows, n_targets_used)
+
+Evaluate `Φ_a = u_inc[ρ_a] + u[σ_a]` at the target points this batch needs, then contract
+against the stored pair densities of the rows it owes. Returns the batch's source pairs, the
+`length(rows) × K` block, the global row indices it covers, and how many target points were
+actually used. No file IO.
+
+With `triangle = true` (default) the batch owes only rows `>= min` of its own columns and
+evaluates only those rows' target points; `assemble_v` mirrors the rest. `triangle = false`
+restores the previous behaviour of evaluating every pair against every batch.
+"""
+function eval_batch_core(br::BatchResult, targets, store, dg, c::CampaignInput;
+                         triangle::Bool = true)
     K = length(br.pair_ids)
     pos = grid_positions(dg, br.gidx)
     At, Bt, Ct = true_cell_vectors(dg)
@@ -313,18 +349,28 @@ function eval_batch_core(br::BatchResult, targets, store, dg, c::CampaignInput)
     sources = [VolumeSource(copy(pos), copy(br.weights), br.densities[:, k];
                             lattice_basis = lb) for k in 1:K]
 
-    Φ = evaluate_batch_potential(br.interface, br.sigma, sources, targets.positions;
+    # Rows this batch owes, and the target points they need. With `triangle`, both shrink as
+    # the campaign proceeds; without it, every batch evaluates the full global target set.
+    rows = triangle ? _triangle_rows(store, br.pair_ids) : (1:length(store.pair_ids))
+    keep = sort!(unique!(reduce(vcat, (store.t_idx[kl] for kl in rows))))
+    remap = Dict(t => i for (i, t) in enumerate(keep))
+    tgt = targets.positions[:, keep]
+
+    Φ = evaluate_batch_potential(br.interface, br.sigma, sources, tgt;
         lhs_tol   = c.solve["lhs_tol"],
         volume_tol = c.solve["volume_tol"],
         c_pad      = c.c_pad,
         screen_boxes = c.boxes, screen_epses = c.epses, screen_eps_out = c.eps_out)
 
-    nP = length(store.pair_ids)
-    V  = Matrix{Float64}(undef, nP, K)
-    for kl in 1:nP, a in 1:K
-        V[kl, a] = dot(store.tw[kl], view(Φ, store.t_idx[kl], a))
+    # V is returned for the OWED rows only; assemble_v places them and mirrors.
+    V = Matrix{Float64}(undef, length(rows), K)
+    for (r, kl) in enumerate(rows)
+        idx = [remap[t] for t in store.t_idx[kl]]
+        for a in 1:K
+            V[r, a] = dot(store.tw[kl], view(Φ, idx, a))
+        end
     end
-    return br.pair_ids, V
+    return br.pair_ids, V, collect(rows), length(keep)
 end
 
 # ---------------------------------------------------------------------------
@@ -357,13 +403,14 @@ function eval_batch(c::CampaignInput, batch_id::Int)
 
     t_setup = time() - t0
     t_phi_start = time()
-    source_pairs, V = eval_batch_core(br, targets, store, dg, c)
+    source_pairs, V, rows, n_tgt_used = eval_batch_core(br, targets, store, dg, c)
     t_phi = time() - t_phi_start
 
     stats = Dict{String,Any}(
         "t_setup" => t_setup, "t_phi" => t_phi, "t_total" => time() - t0,
-        "n_targets" => size(targets.positions, 2), "hostname" => gethostname())
-    save_v_rows(out, batch_id, source_pairs, store.pair_ids, V, stats)
+        "n_targets" => size(targets.positions, 2), "n_targets_used" => n_tgt_used,
+        "n_rows" => length(rows), "hostname" => gethostname())
+    save_v_rows(out, batch_id, source_pairs, store.pair_ids[rows], V, stats; rows = rows)
     @info "eval_batch: done" batch_id n_targets=size(targets.positions, 2) t_total=stats["t_total"]
     return out
 end
@@ -390,15 +437,30 @@ function assemble_v(c::CampaignInput)
     V        = fill(NaN, n, n)
     for b in batches
         vr = load_v_rows(v_path(c, b.batch_id))
-        vr.target_pairs == pair_ids || error("V_$(b.batch_id): target ordering mismatch")
+        vr.target_pairs == pair_ids[vr.rows] || error("V_$(b.batch_id): target ordering mismatch")
         for (k, sp) in enumerate(vr.source_pairs)
-            V[:, col[sp]] = vr.V[:, k]
+            V[vr.rows, col[sp]] = vr.V[:, k]
         end
     end
-    any(isnan, V) && error("assemble_v: missing columns (run eval for all batches first)")
+    # Mirror: each batch evaluated only the rows it owed, so the opposite triangle is empty.
+    # V is symmetric, so filling it from the transpose is exact, not an approximation -- but it
+    # also means max_rel_asym below can no longer serve as an end-to-end check, since the two
+    # halves are no longer independent measurements. The overlap that IS still measured
+    # independently (a batch's own rows against another batch's columns) is reported instead.
+    n_mirrored = 0
+    overlap = Float64[]
+    for i in 1:n, j in 1:n
+        if isnan(V[i, j]) && !isnan(V[j, i])
+            V[i, j] = V[j, i]; n_mirrored += 1
+        elseif !isnan(V[i, j]) && !isnan(V[j, i]) && i != j
+            push!(overlap, abs(V[i, j] - V[j, i]))
+        end
+    end
+    any(isnan, V) && error("assemble_v: missing entries after mirroring " *
+                           "(run eval for all batches first)")
 
     scale        = maximum(abs.(V))
-    max_rel_asym = maximum(abs.(V .- transpose(V))) / scale
+    max_rel_asym = isempty(overlap) ? NaN : maximum(overlap) / scale
     write_v_table(joinpath(c.root, "V_full.tsv"), pair_ids, V)
 
     # eV-unit tensor: V_eV[a,b] = V_raw[a,b] * 4π * E2 / (‖φ_i‖‖φ_j‖ · ‖φ_k‖‖φ_l‖), where
@@ -425,7 +487,9 @@ function assemble_v(c::CampaignInput)
         println(io, "campaign: $(c.name)")
         println(io, "pairs: $n   batches: $(length(batches))")
         println(io, "max|V| (raw): $scale")
-        println(io, "max rel asymmetry |V - V'|/max|V|: $max_rel_asym")
+        println(io, "max rel asymmetry over independently computed pairs: $max_rel_asym" *
+                    (isnan(max_rel_asym) ? "  (no overlap; every off-diagonal entry mirrored)" : ""))
+        println(io, "entries filled by symmetry: $n_mirrored of $(n*n)")
         println(io, "max|V| (eV):  $(maximum(abs.(V_eV)))")
         println(io, "onsite V[1,1] (eV): $(V_eV[1,1])")
     end
@@ -458,11 +522,17 @@ function four_index_integrals(c::CampaignInput)
     col = Dict(p => i for (i, p) in enumerate(pid))
     V   = fill(NaN, length(pid), length(pid))
     for br in brs
-        sp_pairs, Vb = eval_batch_core(br, targets, store, dg, c)
+        # each batch returns only the rows it owes (see eval_batch_core / _triangle_rows)
+        sp_pairs, Vb, rows, _ = eval_batch_core(br, targets, store, dg, c)
         for (k, sp) in enumerate(sp_pairs)
-            V[:, col[sp]] = Vb[:, k]
+            V[rows, col[sp]] = Vb[:, k]
         end
     end
+    # mirror the untouched triangle; V is symmetric, so this is exact
+    for i in 1:length(pid), j in 1:length(pid)
+        isnan(V[i, j]) && !isnan(V[j, i]) && (V[i, j] = V[j, i])
+    end
+    any(isnan, V) && error("four_index_integrals: missing entries after mirroring")
     return (; pair_ids = pid, V)
 end
 
