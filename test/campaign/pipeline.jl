@@ -21,8 +21,9 @@ include("fixture_campaign.jl")
         store = open(deserialize, rho_store_path(c))
         pid = store.pair_ids
         col = Dict(p => i for (i, p) in enumerate(pid))
-        # V blocks are v2: each covers only the rows its batch owes (symmetry supplies the
-        # rest), so place by `rows` and mirror -- the same reconstruction assemble_v performs.
+        # V blocks are v2 and now cover EVERY row (the symmetry-restricted variant was removed
+        # as a net loss), so placing by `rows` must fill the matrix outright. The mirror below
+        # is kept only to reproduce assemble_v's reconstruction exactly.
         Vb = fill(NaN, length(pid), length(pid))
         for b in read_manifest(manifest_path(c))
             vr = BoundaryIntegral.load_v_rows(v_path(c, b.batch_id))
@@ -37,11 +38,14 @@ include("fixture_campaign.jl")
             isnan(Vb[i, j]) && !isnan(Vb[j, i]) && (Vb[i, j] = Vb[j, i])
         end
         @test !any(isnan, Vb)
-        @test n_before > 0            # the triangle really did skip work
+        @test n_before == 0           # every entry computed directly; nothing left to mirror
         @test res.pair_ids == pid
         @test maximum(abs.(res.V .- Vb)) < 1e-8 * max(maximum(abs.(Vb)), eps())
-        # the assembled tensor must be symmetric, which is what licenses the mirroring
-        @test maximum(abs.(res.V .- transpose(res.V))) < 1e-8 * max(maximum(abs.(res.V)), eps())
+        # Symmetry is now a REAL check rather than a tautology: V[i,j] and V[j,i] come from
+        # different batches, hence different interfaces and sigmas, so they agree only to solver
+        # accuracy. (Under the removed symmetry-restricted path one of the two was a copy of the
+        # other, and this held to 1e-8 by construction -- it was testing nothing.)
+        @test maximum(abs.(res.V .- transpose(res.V))) < 1e-2 * max(maximum(abs.(res.V)), eps())
     end
 end
 

@@ -87,8 +87,9 @@ end
 # V file helpers
 # ---------------------------------------------------------------------------
 
-# v2 adds `rows`: the global pair indices this block covers. A block no longer spans every
-# pair, because symmetry lets each batch evaluate only the rows it owes (see _triangle_rows).
+# v2 adds `rows`: the global pair indices this block covers. Introduced when a batch owed only
+# a symmetry-restricted subset; that was measured to be a large net loss and removed, so `rows`
+# is now always 1:n_pairs. The field is kept so v2 files written either way stay readable.
 const V_FORMAT_VERSION = 2
 
 function save_v_rows(path::AbstractString, batch_id::Int,
@@ -305,41 +306,38 @@ end
 # ---------------------------------------------------------------------------
 
 """
-    _triangle_rows(store, source_pairs) -> Vector{Int}
+    eval_batch_core(br, targets, store, dg, c) -> (source_pairs, V, rows, n_targets_used)
 
-Global pair rows this batch must evaluate, exploiting V[a,b] = V[b,a].
+Evaluate `Φ_a = u_inc[ρ_a] + u[σ_a]` at the shared target set, then contract against every
+stored pair density. Returns the batch's source pairs, the `n_pairs × K` block, the global row
+indices it covers (all of them) and the target count. No file IO.
 
-V is symmetric (a Coulomb integral between two pair densities), so only one triangle need be
-computed; `assemble_v` mirrors the rest. For a source pair at global column `cs` the batch owes
-rows `>= cs`, so over the whole batch it owes rows `>= min(cs)`. Everything below that is
-supplied by other batches' columns through the mirror.
+Every batch evaluates every row. A symmetry-restricted variant existed briefly -- V[a,b] =
+V[b,a], so a batch need only own rows `>= min` of its own columns, with `assemble_v` mirroring
+the rest -- and it was removed after measurement, because it was a large net loss:
 
-The saving is NOT in the contractions -- those are cheap dot products -- but in Phi: dropping
-those rows drops their target points from the evaluation entirely, and Phi is the whole cost.
-It is only a real saving when the global pair order tracks the batch order, so that successive
-batches owe successively fewer rows; `consolidate` writes `pair_ids` in manifest batch order,
-which is exactly that.
+  * it did cut the potential evaluation, 18.98 -> 11.19 G source-points (41%), about 2.4
+    node-hours on the 198-orbital campaign;
+  * but a batch's rows then cover only a SUBSET of the shared target set, so the contraction
+    needed a `Dict` remapping every global target index into the subset -- built per batch (up
+    to 7.3M entries) and probed once per target per row.
+
+Measured on lattice_conv_l3_eps2.4_kb31 batch 1 (K = 31, full target set): the potential
+evaluation takes 235 s standalone, while the campaign's `t_phi` for that same batch was 1896 s.
+The 1661 s difference is this remapping and the serial loop around it -- 87% of the batch, to
+save 2.4 node-hours across the campaign. The docstring of the removed function asserted the
+opposite ("the saving is NOT in the contractions -- those are cheap dot products"); it was never
+measured.
+
+Evaluating every row also makes the eval cost `n_pairs × n_targets`, hence independent of the
+batching, and it removes a second-order accuracy concern: with subsets, each batch refined its
+interface (`_refine_interface_for_targets`) against a DIFFERENT target set, so the quadrature a
+given entry received depended on which batch happened to own it.
+
+`assemble_v` then mirrors nothing, and its `max_rel_asym` recovers its full meaning as an
+end-to-end check: every off-diagonal entry is computed twice, independently.
 """
-function _triangle_rows(store, source_pairs::Vector{Tuple{Int,Int}})
-    col = Dict(p => i for (i, p) in enumerate(store.pair_ids))
-    lo = minimum(col[p] for p in source_pairs)
-    return lo:length(store.pair_ids)
-end
-
-"""
-    eval_batch_core(br, targets, store, dg, c; triangle = true) -> (source_pairs, V, rows, n_targets_used)
-
-Evaluate `Φ_a = u_inc[ρ_a] + u[σ_a]` at the target points this batch needs, then contract
-against the stored pair densities of the rows it owes. Returns the batch's source pairs, the
-`length(rows) × K` block, the global row indices it covers, and how many target points were
-actually used. No file IO.
-
-With `triangle = true` (default) the batch owes only rows `>= min` of its own columns and
-evaluates only those rows' target points; `assemble_v` mirrors the rest. `triangle = false`
-restores the previous behaviour of evaluating every pair against every batch.
-"""
-function eval_batch_core(br::BatchResult, targets, store, dg, c::CampaignInput;
-                         triangle::Bool = true)
+function eval_batch_core(br::BatchResult, targets, store, dg, c::CampaignInput)
     K = length(br.pair_ids)
     pos = grid_positions(dg, br.gidx)
     At, Bt, Ct = true_cell_vectors(dg)
@@ -349,28 +347,20 @@ function eval_batch_core(br::BatchResult, targets, store, dg, c::CampaignInput;
     sources = [VolumeSource(copy(pos), copy(br.weights), br.densities[:, k];
                             lattice_basis = lb) for k in 1:K]
 
-    # Rows this batch owes, and the target points they need. With `triangle`, both shrink as
-    # the campaign proceeds; without it, every batch evaluates the full global target set.
-    rows = triangle ? _triangle_rows(store, br.pair_ids) : (1:length(store.pair_ids))
-    keep = sort!(unique!(reduce(vcat, (store.t_idx[kl] for kl in rows))))
-    remap = Dict(t => i for (i, t) in enumerate(keep))
-    tgt = targets.positions[:, keep]
-
-    Φ = evaluate_batch_potential(br.interface, br.sigma, sources, tgt;
+    Φ = evaluate_batch_potential(br.interface, br.sigma, sources, targets.positions;
         lhs_tol   = c.solve["lhs_tol"],
         volume_tol = c.solve["volume_tol"],
         c_pad      = c.c_pad,
         screen_boxes = c.boxes, screen_epses = c.epses, screen_eps_out = c.eps_out)
 
-    # V is returned for the OWED rows only; assemble_v places them and mirrors.
-    V = Matrix{Float64}(undef, length(rows), K)
-    for (r, kl) in enumerate(rows)
-        idx = [remap[t] for t in store.t_idx[kl]]
-        for a in 1:K
-            V[r, a] = dot(store.tw[kl], view(Φ, idx, a))
-        end
+    # Contract directly against the global target indices -- no remapping, which is the whole
+    # point of evaluating the full set.
+    nP = length(store.pair_ids)
+    V  = Matrix{Float64}(undef, nP, K)
+    for kl in 1:nP, a in 1:K
+        V[kl, a] = dot(store.tw[kl], view(Φ, store.t_idx[kl], a))
     end
-    return br.pair_ids, V, collect(rows), length(keep)
+    return br.pair_ids, V, collect(1:nP), size(targets.positions, 2)
 end
 
 # ---------------------------------------------------------------------------
@@ -408,10 +398,10 @@ function eval_batch(c::CampaignInput, batch_id::Int)
 
     stats = Dict{String,Any}(
         "t_setup" => t_setup, "t_phi" => t_phi, "t_total" => time() - t0,
-        "n_targets" => size(targets.positions, 2), "n_targets_used" => n_tgt_used,
+        "n_targets" => n_tgt_used, "n_targets_used" => n_tgt_used,
         "n_rows" => length(rows), "hostname" => gethostname())
     save_v_rows(out, batch_id, source_pairs, store.pair_ids[rows], V, stats; rows = rows)
-    @info "eval_batch: done" batch_id n_targets=size(targets.positions, 2) t_total=stats["t_total"]
+    @info "eval_batch: done" batch_id n_targets=n_tgt_used t_phi=t_phi t_total=stats["t_total"]
     return out
 end
 
@@ -442,11 +432,10 @@ function assemble_v(c::CampaignInput)
             V[vr.rows, col[sp]] = vr.V[:, k]
         end
     end
-    # Mirror: each batch evaluated only the rows it owed, so the opposite triangle is empty.
-    # V is symmetric, so filling it from the transpose is exact, not an approximation -- but it
-    # also means max_rel_asym below can no longer serve as an end-to-end check, since the two
-    # halves are no longer independent measurements. The overlap that IS still measured
-    # independently (a batch's own rows against another batch's columns) is reported instead.
+    # With every batch filling every row, nothing is mirrored and `overlap` covers every
+    # off-diagonal entry, so max_rel_asym is once again a genuine end-to-end check: V[i,j] and
+    # V[j,i] are computed by different batches, from different interfaces and sigmas. The mirror
+    # is kept for V files written by the symmetry-restricted variant, where it was load-bearing.
     n_mirrored = 0
     overlap = Float64[]
     for i in 1:n, j in 1:n
@@ -522,13 +511,13 @@ function four_index_integrals(c::CampaignInput)
     col = Dict(p => i for (i, p) in enumerate(pid))
     V   = fill(NaN, length(pid), length(pid))
     for br in brs
-        # each batch returns only the rows it owes (see eval_batch_core / _triangle_rows)
-        sp_pairs, Vb, rows, _ = eval_batch_core(br, targets, store, dg, c)
+        sp_pairs, Vb, rows, _ = eval_batch_core(br, targets, store, dg, c)   # rows = every pair
         for (k, sp) in enumerate(sp_pairs)
             V[rows, col[sp]] = Vb[:, k]
         end
     end
-    # mirror the untouched triangle; V is symmetric, so this is exact
+    # Every batch now fills every row, so nothing should be left over; the mirror is retained
+    # only as a guard for a partially-filled V, and any NaN after it is a real error.
     for i in 1:length(pid), j in 1:length(pid)
         isnan(V[i, j]) && !isnan(V[j, i]) && (V[i, j] = V[j, i])
     end
