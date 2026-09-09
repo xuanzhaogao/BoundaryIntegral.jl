@@ -84,11 +84,20 @@ function _pot_integrand_hcubature(
     return integrand
 end
 
+"""
+    laplace3d_pot_panel_hcubature(panel_src, targets, target_ids, atol; threaded = true)
+
+Adaptive-quadrature potential of one source panel at `target_ids`. `threaded = false` runs the
+target loop serially, for callers that are ALREADY inside a parallel region --
+`laplace3d_pottrg_corrections_hcubature` parallelises over panels instead, so threading here
+too would nest parallel regions.
+"""
 function laplace3d_pot_panel_hcubature(
     panel_src::FlatPanel{T, 3},
     targets::Matrix{T},
     target_ids::Vector{Int},
-    atol::T,
+    atol::T;
+    threaded::Bool = true,
 ) where T
     ns = panel_src.gl_xs
     bary_weights = panel_src.bary_weights
@@ -107,12 +116,21 @@ function laplace3d_pot_panel_hcubature(
     lb = SVector{2,T}(-1, -1)
     ub = SVector{2,T}(1, 1)
 
-    Base.Threads.@threads for ti in 1:length(target_ids)
+    @inline function _one_target(ti)
         target_id = target_ids[ti]
         target = (targets[1, target_id], targets[2, target_id], targets[3, target_id])
         integrand = _pot_integrand_hcubature(nq_val, ns, bary_weights, cc, bma, dma, scale, target)
         res, _ = hcubature(integrand, lb, ub; atol = atol)
         @views pot_exact[ti, :] .= res
+    end
+    if threaded
+        Base.Threads.@threads for ti in 1:length(target_ids)
+            _one_target(ti)
+        end
+    else
+        for ti in 1:length(target_ids)
+            _one_target(ti)
+        end
     end
 
     return pot_exact
@@ -174,30 +192,62 @@ function laplace3d_pottrg_corrections_hcubature(
     total_n = offsets[end]
     n_targets = size(targets, 2)
 
-    rows = Int[]
-    cols = Int[]
-    vals = T[]
+    # Parallelise over PANELS, not over one panel's targets.
+    #
+    # This loop used to be serial, with laplace3d_pot_panel_hcubature opening a @threads region
+    # for each panel's near targets -- typically a handful. Every entry of the neighbour list
+    # therefore paid a fork/join over the whole thread pool for a few iterations of work, and
+    # that overhead GROWS with the thread count. Measured on the Sec. 5.2 evaluation benchmark
+    # (7.17M targets): 21.6 s at 64 threads against 99.1 s at 96, while the FMM (0.95 s) and
+    # NUFFT (1.25 s) components underneath were flat. One parallel region over the whole
+    # neighbour list removes both the fork/join overhead and the serial push! accumulation.
+    #
+    # Buffers are indexed by CHUNK, not by threadid(): Threads.@threads may migrate tasks
+    # between threads, so threadid() inside the loop body is not a safe buffer key. Chunking at
+    # a multiple of nthreads keeps the dynamic scheduler balanced -- panels have very unequal
+    # target counts -- while giving each chunk sole ownership of its buffer.
+    entries = collect(target_neighbor_list)
+    n_entries = length(entries)
+    if n_entries == 0
+        return sparse(Int[], Int[], T[], n_targets, total_n)
+    end
+    nchunks = min(n_entries, max(1, 4 * Base.Threads.nthreads()))
+    chunks = collect(Iterators.partition(1:n_entries, cld(n_entries, nchunks)))
 
-    for (i, target_ids) in target_neighbor_list
-        panel_src = interface.panels[i]
-        col_range = (offsets[i] + 1):offsets[i + 1]
+    rows_c = [Int[] for _ in 1:length(chunks)]
+    cols_c = [Int[] for _ in 1:length(chunks)]
+    vals_c = [T[] for _ in 1:length(chunks)]
 
-        pot_exact = laplace3d_pot_panel_hcubature(panel_src, targets, target_ids, atol)
+    Base.Threads.@threads for ci in 1:length(chunks)
+        rows, cols, vals = rows_c[ci], cols_c[ci], vals_c[ci]
+        for e in chunks[ci]
+            i, target_ids = entries[e]
+            panel_src = interface.panels[i]
+            col_range = (offsets[i] + 1):offsets[i + 1]
 
-        for (t_local, t_global) in enumerate(target_ids)
-            target = (targets[1, t_global], targets[2, t_global], targets[3, t_global])
-            for (c_local, c_global) in enumerate(col_range)
-                direct = panel_src.weights[c_local] * laplace3d_pot(panel_src.points[c_local], target)
-                v = pot_exact[t_local, c_local] - direct
-                iszero(v) && continue
-                push!(rows, t_global)
-                push!(cols, c_global)
-                push!(vals, v)
+            # serial: we are already inside a parallel region
+            pot_exact = laplace3d_pot_panel_hcubature(panel_src, targets, target_ids, atol;
+                                                      threaded = false)
+
+            for (t_local, t_global) in enumerate(target_ids)
+                target = (targets[1, t_global], targets[2, t_global], targets[3, t_global])
+                for (c_local, c_global) in enumerate(col_range)
+                    direct = panel_src.weights[c_local] * laplace3d_pot(panel_src.points[c_local], target)
+                    v = pot_exact[t_local, c_local] - direct
+                    iszero(v) && continue
+                    push!(rows, t_global)
+                    push!(cols, c_global)
+                    push!(vals, v)
+                end
             end
         end
     end
 
-    return sparse(rows, cols, vals, n_targets, total_n)
+    # (t_global, c_global) pairs are unique across panels -- distinct panels own disjoint
+    # column ranges -- so sparse() sees no duplicates and the result does not depend on the
+    # order in which the chunks are concatenated.
+    return sparse(reduce(vcat, rows_c), reduce(vcat, cols_c), reduce(vcat, vals_c),
+                  n_targets, total_n)
 end
 
 # direct evaluation of correction action (DT_exact - DT_direct) * sigma
