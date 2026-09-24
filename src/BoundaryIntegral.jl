@@ -10,7 +10,11 @@ using ForwardDiff
 using TOML
 
 using FMM2D, FMM3D
-using TKM3D
+import FFTW, FINUFFT
+
+# truncated-kernel method for volume-source potentials (internal submodule)
+include("tkm3d/TKM3D.jl")
+using .TKM3D
 
 #core types
 export FlatPanel

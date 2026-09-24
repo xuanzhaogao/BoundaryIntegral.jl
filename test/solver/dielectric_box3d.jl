@@ -270,7 +270,7 @@ end
     shape_sources = join([read(joinpath(shape_dir, f), String)
                           for f in readdir(shape_dir) if endswith(f, ".jl")], "\n")
 
-    @test occursin("using TKM3D", entrypoint)
+    @test occursin("using .TKM3D", entrypoint)
     @test !occursin("using FBCPoisson", entrypoint)
     @test occursin("ltkm3dc", shape_sources)
     @test !occursin("lfbc3d", shape_sources)

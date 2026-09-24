@@ -1,9 +1,10 @@
 name = "BoundaryIntegral"
 uuid = "c5e3a73d-e4f2-41fa-921b-bb4fcd908115"
-version = "1.0.0-DEV"
+version = "0.1.0"
 authors = ["Xuanzhao Gao <xgao@flatironinstitute.org> and contributors"]
 
 [deps]
+FFTW = "7a1cc6ca-52ef-59f5-83cd-3a7055c09341"
 FINUFFT = "d8beea63-0952-562e-9c6a-8e8ef7364055"
 FMM2D = "2d63477d-9690-4b75-bcc1-c3461d43fecc"
 FMM3D = "1e13804c-f9b7-11ea-0ef0-29f3b1745df8"
@@ -20,7 +21,6 @@ Sockets = "6462fe0b-24de-5631-8697-dd941f90decc"
 SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
 SpecialFunctions = "276daf66-3868-5448-9aa4-cd146d93841b"
 StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
-TKM3D = "5e3dfc9c-492c-4308-90e6-1b6681d75e39"
 TOML = "fa267f1f-6049-4f14-aa54-33bafae1ed76"
 
 [weakdeps]
@@ -34,26 +34,29 @@ MakieExt = ["Makie"]
 
 [compat]
 Distributed = "1"
+FastGaussQuadrature = "1.1.0"
+FFTW = "1.10"
+FINUFFT = "3.5"
 FMM2D = "0.2.0"
 FMM3D = "1.0.1"
-FastGaussQuadrature = "1.1.0"
 ForwardDiff = "1.3.2"
 HCubature = "1.8.0"
 Krylov = "0.10.2"
 LegendrePolynomials = "0.4.5"
-LinearAlgebra = "1.12.0"
+LinearAlgebra = "1"
 LinearMaps = "3.11.4"
 Makie = "0.24"
 NearestNeighbors = "0.4.20"
-Serialization = "1.11.0"
+Random = "1"
+Serialization = "1"
 SlurmClusterManager = "1"
 Sockets = "1"
-SparseArrays = "1.12.0"
+SparseArrays = "1"
 SpecialFunctions = "2.6.1"
 StaticArrays = "1.9.16"
-TKM3D = "1"
+Test = "1"
 TOML = "1"
-julia = "1.10, 1.11, 1.12"
+julia = "1.10"
 
 [extras]
 Distributed = "8ba89e20-285c-5b6f-9357-94700520ee1b"

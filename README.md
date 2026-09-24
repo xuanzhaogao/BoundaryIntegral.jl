@@ -19,8 +19,8 @@ pipeline that can run distributed across a cluster.
 - Volume charge sources, plus a reusable precomputed spectral field (`PrecomputedVolumeField`)
   for fast repeated potential/gradient evaluation and right-hand-side assembly.
 - Many-right-hand-side (block) solves and four-index Coulomb integrals.
-- A batched lattice campaign pipeline for large four-index runs, with optional
-  distributed/Slurm execution.
+- A batched, restartable lattice campaign pipeline for large four-index runs, with
+  optional distributed/Slurm execution.
 - Linear algebra helpers (`solve_lu`, `solve_gmres`).
 - Optional Makie visualization extension.
 
@@ -29,12 +29,14 @@ scope directly.
 
 ## Installation
 
+BoundaryIntegral.jl requires Julia 1.10 or later.
+
 ```julia
 using Pkg
 Pkg.add("BoundaryIntegral")
 ```
 
-For local development:
+For local development, clone the repository and run:
 
 ```sh
 julia --project -e 'using Pkg; Pkg.instantiate()'
@@ -93,15 +95,19 @@ refined to resolve that source:
 ```julia
 using BoundaryIntegral
 
-# positions: 3×N matrix, weights/density: length-N vectors
-vs = VolumeSource(positions, weights, density)
+# A Gaussian charge sampled on a uniform midpoint grid: positions (3×N), weights, density.
+n, h = 24, 1.2 / 24
+xs = range(-0.6 + h / 2, 0.6 - h / 2; length = n)
+positions = reduce(hcat, [[x, y, z] for x in xs for y in xs for z in xs])
+density = [exp(-sum(abs2, p) / (2 * 0.08^2)) for p in eachcol(positions)]
+vs = VolumeSource(positions, fill(h^3, n^3), density)
 
 # single_dielectric_box3d_rhs_adaptive(Lx, Ly, Lz, n_quad, source,
 #                                       eps_src, l_ec, rhs_atol, eps_in, eps_out[, T])
 interface = single_dielectric_box3d_rhs_adaptive(
-    Lx, Ly, Lz, n_quad, vs, eps_src, l_ec, rhs_atol, eps_in, eps_out, Float64)
+    1.0, 1.0, 1.0, 4, vs, 1.0, 0.25, 1e-3, 4.0, 1.0, Float64)
 
-rhs = rhs_dielectric_box3d_hybrid(interface, vs, eps_src, 1e-6)
+rhs = rhs_dielectric_box3d_hybrid(interface, vs, 1.0, 1e-6)
 ```
 
 When the same source is reused for many target batches or assemblies, build the field
@@ -113,7 +119,7 @@ field = PrecomputedVolumeField(vs; tol = 1e-6)
 
 phi  = volume_field_potential(field, targets)   # targets: 3×n  ->  length-n potential
 grad = volume_field_gradient(field, targets)    #              ->  3×n gradient
-rhs  = rhs_dielectric_box3d_field(interface, field, eps_src)
+rhs  = rhs_dielectric_box3d_field(interface, field, 1.0)
 ```
 
 ## Many right-hand sides and four-index integrals
@@ -126,74 +132,14 @@ using BoundaryIntegral
 
 # vss::Vector{VolumeSource} on a shared interface that resolves all of them
 # (e.g. built with multi_dielectric_box3d_rhs_adaptive)
-sigma, stats = solve_dielectric_box3d_block(interface, vss)
+sigma, stats = solve_dielectric_box3d_block(interface, vss; rtol = 1e-6)
 V = four_index_matrix(interface, vss, sigma; lhs_tol = 1e-6, volume_tol = 1e-6)
 ```
 
-## Lattice campaign (batched, optionally distributed)
+## Lattice campaigns
 
 For large four-index runs over many orbital centers on a lattice, the package provides a
-file-backed pipeline driven from a TOML campaign description. It groups pair densities
-into batches that share one boundary operator, solves each batch, then evaluates and
-contracts every pair against a shared target set.
-
-### Pipeline
-
-```
-prepare  →  solve_batch  →  consolidate  →  eval_batch  →  assemble_v
-```
-
-- **prepare** — enumerate centers, neighbor pairs, and batches; write the manifest.
-- **solve_batch** — per batch: assemble the shared interface, block-GMRES, store σ + screened ρ.
-- **consolidate** — build the shared evaluation target set and the contraction store.
-- **eval_batch** — per batch: evaluate Φ at the shared targets and contract all pairs into V columns.
-- **assemble_v** — gather all V columns into the dense matrix; write `V_full.tsv` + `report.txt`.
-
-Every phase writes its outputs atomically (temp file + rename), so a run is crash-safe and
-restartable: re-running a phase skips already-completed batches, and a killed job is
-recovered simply by rerunning the phase. `pending_batches(c, :solve | :eval)` reports
-what is left to do.
-
-### Campaign TOML
-
-```toml
-name = "demo"                          # campaign name
-root = "/path/to/output"               # output dir: manifest.tsv, batches/, V/, logs/
-templates = ["orb1.xsf", "orb2.xsf"]   # type index -> .xsf path (relative to this file)
-
-[[orbital]]                            # one entry per orbital; id = 1-based order
-type = 1                               # index into `templates`
-x = 0.0                                # Cartesian center in the templates' frame
-y = 0.0
-z = 7.5
-
-[pairing]
-neighbor_cutoff = 2.6                  # pair orbitals within this distance (default: Inf)
-# pairs = [[1, 2], [1, 3]]             # OR give explicit pair overrides instead
-
-[dielectrics]
-eps_out = 1.0
-boxes = [[0.0, 0.0, 7.5, 90.0, 90.0, 3.35, 3.5]]   # rows of [cx cy cz Lx Ly Lz eps]
-
-[solve]
-n_quad = 6
-edge_refine_level = 2                  # or set `l_ec` directly
-rhs_tol = 1e-3
-lhs_tol = 1e-5
-gmres_rtol = 1e-5
-support_rtol = 1e-4
-volume_tol = 1e-5
-max_order = 8
-max_depth = 128
-
-[batching]
-n_centers_per_batch = 1
-
-[eval]
-far_pad_steps = 2.0
-```
-
-### Running serially
+file-backed, restartable pipeline driven by a TOML campaign description:
 
 ```julia
 using BoundaryIntegral
@@ -206,61 +152,16 @@ for id in pending_batches(c, :eval); eval_batch(c, id); end
 assemble_v(c)
 ```
 
-The whole pipeline can also be run in memory, without writing files, via
-`four_index_integrals("campaign.toml")` (returns `(; pair_ids, V)`).
-
-### Running distributed
-
-The `:solve` and `:eval` phases parallelize over batches. `run_phase` is provided by a
-package extension; load its weak dependencies (`Distributed` and `SlurmClusterManager`) to
-enable it. Spawning policy: inside a Slurm allocation with more than one task it uses
-`SlurmManager()` (one worker per task); otherwise it spawns `workers` local processes; with
-`workers = 0` and no allocation it runs inline.
-
-```julia
-using BoundaryIntegral, Distributed, SlurmClusterManager
-
-c = load_campaign("campaign.toml")
-prepare(c)
-run_phase(c, :solve; workers = 4)   # local workers (or SlurmManager inside an allocation)
-consolidate(c)
-run_phase(c, :eval; workers = 4)
-assemble_v(c)
-```
-
-A campaign is typically driven by a small script over this API (the package itself ships
-no CLI). On Slurm, run one task per node and give each task the whole node via threads:
-
-```bash
-#!/bin/bash
-#SBATCH --nodes=4
-#SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=96
-#SBATCH --output=logs/solve_%j.out
-set -euo pipefail
-
-# Pin both thread pools — unpinned threads silently corrupt timings.
-export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
-export OPENBLAS_NUM_THREADS=$SLURM_CPUS_PER_TASK
-export JULIA_GLUE_THREADS=8
-
-julia --project -t "$JULIA_GLUE_THREADS" driver.jl campaign.toml solve
-```
-
-where `driver.jl` parses `<campaign.toml> <phase>` and calls the phase functions above.
-Notes for cluster runs:
-
-- **Precompile on the head process first** (`using Pkg; Pkg.precompile()` before loading
-  `Distributed`/`SlurmClusterManager`) so workers don't race to precompile over a shared
-  filesystem.
-- **One worker per node** (`--ntasks-per-node=1`, `--cpus-per-task=<cores>`); the FMM
-  saturates many cores, so node-sized tasks are the right grain.
-- **Crash/walltime recovery:** just resubmit the same phase — completed batches are skipped.
+The `:solve` and `:eval` phases can also run in parallel across local workers or a Slurm
+allocation with `run_phase` (load `Distributed` and `SlurmClusterManager` to enable it).
+See the [lattice campaign guide](https://xuanzhaogao.github.io/BoundaryIntegral.jl/dev/campaign/)
+for the TOML format, the pipeline phases, and cluster usage.
 
 ## Visualization
 
-Visualization helpers live under `viz_2d` and `viz_3d`. To use them, install Makie and a backend,
-then load the backend before `BoundaryIntegral`:
+Plotting helpers (`viz_2d`, `viz_3d`, `viz_3d_surface`, `viz_3d_interface_solution`,
+`viz_3d_zslice`, `plot_campaign_geometry`) live in a Makie package extension. Install Makie
+and a backend, then load the backend alongside `BoundaryIntegral`:
 
 ```julia
 using Pkg
@@ -270,13 +171,17 @@ Pkg.add(["Makie", "CairoMakie"])
 ```julia
 using CairoMakie
 using BoundaryIntegral
+
+interface = single_dielectric_box3d(1.2, 0.8, 0.6, 4, 0.2, 4.0, 1.0, Float64)
+fig = viz_3d(interface)
 ```
 
 ## Development
 
 - Run tests: `julia --project -e 'using Pkg; Pkg.test()'`
   (set `BI_RUN_FULL_TESTS=1` for the full suite, including 3D near-correction and solver tests).
-- Build docs: `julia --project=docs docs/make.jl`
+- Build docs: `julia --project=docs -e 'using Pkg; Pkg.develop(path="."); Pkg.instantiate()'`,
+  then `julia --project=docs docs/make.jl`.
 
 ## License
 

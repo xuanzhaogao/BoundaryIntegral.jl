@@ -137,7 +137,7 @@ function PrecomputedVolumeField(
     srcx = dks[1] .* (vec(view(sources, 1, :)) .- center[1])
     srcy = dks[2] .* (vec(view(sources, 2, :)) .- center[2])
     srcz = dks[3] .* (vec(view(sources, 3, :)) .- center[3])
-    coeff0 = TKM3D.FINUFFT.nufft3d1(srcx, srcy, srcz, complex.(charges), -1, tolT, nmodes...;
+    coeff0 = FINUFFT.nufft3d1(srcx, srcy, srcz, complex.(charges), -1, tolT, nmodes...;
         nthreads = nthreads)
     coeff = ndims(coeff0) == 4 ? dropdims(coeff0; dims = 4) : coeff0
     @inbounds for iz in eachindex(kz), iy in eachindex(ky), ix in eachindex(kx)
@@ -164,7 +164,7 @@ function PrecomputedVolumeField(
 end
 
 # --- cache_fft mode internals -----------------------------------------------
-# Mirrors TKM3D's discrete spread-only conventions (_ltkm3dd_eval_spreadonly,
+# Mirrors TKM3D.jl's discrete spread-only conventions (_ltkm3dd_eval_spreadonly,
 # dir-2 leg): centered-mode coefficients are divided by the spreading-kernel
 # Fourier factors phi (the deconvolution FINUFFT skips in spreadinterponly
 # mode), placed in FFT ordering on the fine grid, and bfft'd (iflag = +1).
@@ -172,8 +172,7 @@ end
 # the standard type-2 on the original coefficients, provided the spectrum has
 # decayed at the mode-box edge (see the struct docstring).
 #
-# TKM3D private-API surface reached by this feature (these should be promoted
-# to a public TKM3D spread-interp API before wide use):
+# Spread-interp helpers from the internal TKM3D submodule (src/tkm3d/) used here:
 #   _ltkm3dd_spreadonly_upsampfac
 #   _ltkm3dd_spreadonly_kernel_params
 #   _ltkm3dd_spreadonly_horner_coeffs
@@ -181,8 +180,6 @@ end
 #   _ltkm3dd_spreadonly_onedim_fseries_kernel
 #   _ltkm3dd_spreadonly_deconvolveshuffle3d_dir2
 #   _ltkm3dd_spreadonly_evaluate_kernel_runtime
-#   TKM3D.FFTW  (accessed for bfft!)
-# Pre-existing private usage (present before this feature):
 #   _finufft_type2_eval_3d
 #   _spectral_gradient_coeffs_3d
 
@@ -209,7 +206,7 @@ function _field_cache_fft_grids(
     pot_grid = nothing
     if compute_pot
         fw = TKM3D._ltkm3dd_spreadonly_deconvolveshuffle3d_dir2(coeff, nfdim, phi1, phi2, phi3)
-        TKM3D.FFTW.bfft!(fw)   # in-place: fw is already the final-size padded array
+        FFTW.bfft!(fw)   # in-place: fw is already the final-size padded array
         pot_grid = fw
     end
     grad_grid = nothing
@@ -218,7 +215,7 @@ function _field_cache_fft_grids(
         for d in 1:3
             fw = TKM3D._ltkm3dd_spreadonly_deconvolveshuffle3d_dir2(
                 view(grad_coeff, :, :, :, d), nfdim, phi1, phi2, phi3)
-            TKM3D.FFTW.bfft!(fw)   # in-place: reuse fw without a second allocation
+            FFTW.bfft!(fw)   # in-place: reuse fw without a second allocation
             grad_grid[:, :, :, d] = fw
         end
     end

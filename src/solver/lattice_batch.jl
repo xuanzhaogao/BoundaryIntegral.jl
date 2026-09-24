@@ -1,7 +1,6 @@
 # src/solver/lattice_batch.jl
-# Lattice-scale batches: frame-TRANSLATED orbital instances on a virtual global grid
-# (spec: docs/superpowers/specs/2026-06-10-multinode-lattice-campaign-design.md).
-# Unlike the .bie LATTICE images (periodic circshift on the template grid), instances
+# Lattice-scale batches: frame-TRANSLATED orbital instances on a virtual global grid.
+# Unlike a periodic circshift on the template grid, instances
 # here carry an integer global-frame offset and never wrap — so >5 distinct cells per
 # direction are representable and pair products are exact on frame intersections.
 
@@ -15,8 +14,8 @@ const BoxGeom = NamedTuple{(:center, :Lx, :Ly, :Lz),
 
 Integer grid-step offset of the lattice translation `n1·a1 + n2·a2 + n3·a3` (the
 global-frame offset of a translated orbital instance). Errors if a lattice vector is
-not grid-commensurate. Same arithmetic as the `.bie` LATTICE images, but interpreted
-as a frame translation, not a circshift.
+not grid-commensurate. The offset is interpreted as a frame translation, not a
+circshift.
 """
 lattice_grid_steps(datagrid, primvec::AbstractMatrix, n::NTuple{3,Int}) =
     _lattice_grid_shift(datagrid, primvec, n)
@@ -280,8 +279,8 @@ end
     solve_dielectric_lattice_batch(boxes, epses, eps_out, b::LatticeBatch; kw...)
         -> (; sigma, interface, sources, stats)
 
-Steps 0–6 for an explicit-pair batch: ONE shared interface refined on the batch
-envelope, then block GMRES. Mirrors `solve_dielectric_box3d_group` without SystemInput.
+Solve an explicit-pair batch: ONE shared interface refined on the batch envelope,
+then block GMRES over all pair densities.
 """
 function solve_dielectric_lattice_batch(boxes::Vector{BoxGeom}, epses::Vector{Float64},
         eps_out::Float64, b::LatticeBatch;

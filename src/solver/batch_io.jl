@@ -1,5 +1,5 @@
 # src/solver/batch_io.jl
-# Solve-phase output container + atomic file IO (spec §3). Files are written
+# Solve-phase output container + atomic file IO. Files are written
 # tmp-then-rename on the SAME filesystem, so a batch file either exists complete or
 # not at all; status scans never see partial writes.
 

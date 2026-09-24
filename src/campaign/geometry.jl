@@ -1,5 +1,5 @@
 # Snap an arbitrary Cartesian orbital position to the nearest integer grid offset on the
-# template's grid, preserving the exact commensurate-grid machinery (spec §4).
+# template's grid, preserving the exact commensurate-grid machinery.
 
 using LinearAlgebra
 

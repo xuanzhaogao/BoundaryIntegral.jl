@@ -1,5 +1,4 @@
 # Adaptive quadtree-based moments for touching (edge-sharing) near pairs.
-# See docs/superpowers/specs/2026-05-18-near-correction-improvements-design.md §5.4.
 
 struct AdaptiveConfig
     atol::Float64

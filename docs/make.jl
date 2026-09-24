@@ -8,16 +8,18 @@ makedocs(;
     authors="Xuanzhao Gao <xgao@flatironinstitute.org> and contributors",
     sitename="BoundaryIntegral.jl",
     format=Documenter.HTML(;
-        canonical="https://Xuanzhao Gao.github.io/BoundaryIntegral.jl",
+        canonical="https://xuanzhaogao.github.io/BoundaryIntegral.jl",
         edit_link="main",
         assets=String[],
     ),
     pages=[
         "Home" => "index.md",
+        "Lattice campaigns" => "campaign.md",
+        "API reference" => "api.md",
     ],
 )
 
 deploydocs(;
-    repo="github.com/Xuanzhao Gao/BoundaryIntegral.jl",
+    repo="github.com/xuanzhaogao/BoundaryIntegral.jl",
     devbranch="main",
 )

@@ -1,5 +1,4 @@
-# Unified .toml input for the four-index campaign (spec
-# docs/.../2026-06-10-toml-campaign-unification-design.md). Replaces the .bie format.
+# TOML input for the four-index campaign.
 
 using TOML
 
@@ -20,7 +19,7 @@ end
     CampaignInput
 
 Parsed `.toml`: the full system (orbitals, dielectrics, solve params) plus campaign
-batching/eval settings. Successor to both `Campaign` and the deleted `SystemInput`.
+batching/eval settings.
 Template grids are NOT loaded here (see `load_templates!`). Orbital id = 1-based index
 in `orbitals`.
 """

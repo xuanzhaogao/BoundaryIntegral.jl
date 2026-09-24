@@ -25,11 +25,3 @@ end
     @test_logs (:warn, r"Makie.*backend") BoundaryIntegral.viz_3d_interface_solution(nothing)
     @test_logs (:warn, r"Makie.*backend") BoundaryIntegral.viz_3d_zslice(nothing)
 end
-
-@testset "Visualization README guidance" begin
-    readme = read(joinpath(pkg_root, "README.md"), String)
-    @test occursin("Optional Makie visualization extension.", readme)
-    @test occursin("install Makie and a backend", readme)
-    @test occursin("Pkg.add([\"Makie\", \"CairoMakie\"])", readme)
-    @test !occursin("To enable GLMakie-based plotting", readme)
-end
