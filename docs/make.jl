@@ -14,8 +14,10 @@ makedocs(;
     ),
     pages=[
         "Home" => "index.md",
+        "User guide" => "guide.md",
         "Lattice campaigns" => "campaign.md",
         "API reference" => "api.md",
+        "Development" => "development.md",
     ],
 )
 
